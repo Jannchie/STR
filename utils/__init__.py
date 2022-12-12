@@ -32,7 +32,8 @@ class TagRecHelper:
         self.uidx2id = {i: uid for uid, i in uid2idx.items()}
         self.iidx2id = {i: iid for iid, i in iid2idx.items()}
         self.gidx2id = {i: gid for gid, i in gid2idx.items()}
-        self.truth = self.test_set.groupby(USER_COL)[ITEM_COL].apply(list).to_list()
+        truth_dict = self.test_set.groupby(USER_COL)[ITEM_COL].apply(list).to_dict()
+        self.truth = [truth_dict.get(uid, []) for uid in range(self.nuser)]
         self.mask = self.train_set.groupby(USER_COL)[ITEM_COL].apply(list).to_list()
         users = torch.arange(0, self.nuser, dtype=torch.long)
         self.ul = DataLoader(users, batch_size=128, pin_memory=True)
@@ -48,10 +49,10 @@ class TagRecHelper:
         k = 20
         h = ['Recall', 'Precision', 'F1', 'NDCG', 'MAP', 'MRR', 'HitRate']
         f = [Recall(k), Precision(k), F1(k), NDCG(k), MAP(k), MRR(k), HitRate(k)]
-        res_mean = [ np.mean([m(res_list[i], self.truth[i]) for i in range(model.nuser)]) for m in f ]
+        res_mean = [ np.mean([m(res_list[i], self.truth[i]) for i in range(len(res_list))]) for m in f ]
         result_df = pd.DataFrame([res_mean], columns=h)
         print('Test Result:', result_df, '', sep='\n')
-        return res_mean
+        return res_mean, result_df
 
     def test_target_user(self, model, u):
         res = model.recommend(torch.tensor([u]), mask=self.mask)
@@ -62,7 +63,7 @@ class TagRecHelper:
         res_mean = [m(res_list[0], self.truth[u]) for m in f]
         result_df = pd.DataFrame([res_mean], columns=h)
         print(result_df)
-
+    
 class RecHelper:
   def __init__(self, model: torch.nn.Module, data:TagRecHelper):
     self.tag_info = { d['tag_id']:d['tag_name'] for d in list(csv.DictReader(open('./db/tag_info.csv', 'r', encoding='utf-8-sig')))}
@@ -111,7 +112,6 @@ def load_bili() -> TagRecHelper:
     if os.path.exists('./data/bilibili/bilib-ds'):
         return pickle.load(open('./data/bilibili/bilib-ds', 'rb'))
     with open('./db/video_data.csv','r', encoding='utf-8-sig') as f:
-        data = []
         for line in tqdm(f):
             row = line.rstrip().split(',')
             mid, aid, tags = row[0], row[1], row[2:]
@@ -133,6 +133,7 @@ def load_bili() -> TagRecHelper:
 
 
     ds = TagRecHelper(train_set, test_set, uid2idx, iid2idx, gid2idx)
+    ds.mask = None
     pickle.dump(ds, open('./data/bilibili/bilib-ds', 'wb'))
     return ds
     

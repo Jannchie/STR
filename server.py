@@ -7,10 +7,12 @@ import torch
 app = Flask(__name__)
 helper = None
 
+
 @app.route('/<uid>')
 def hello(uid: str):
-  res =  helper.get_rec_tags(uid)
+  res = helper.get_rec_tags(uid)
   return jsonify(res)
+
 
 if __name__ == '__main__':
   data = load_bili()
