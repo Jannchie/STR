@@ -9,14 +9,33 @@ str_config = {
   'n_epoch': 50,
   'latent_dim': 128,
   'affinity': 'dot',
-  'aggregate': 'mean',
-  # 'attention_head': 16,
+  'aggregate': 'weighted-sum',
   'aggregate_w': 0.8,
-  'auto_gamma': False,
   'dropout': 0.1,
   'n_interactive_items': 16,
   'popular_alpha': 0.2,
+  'group_loss_gamma': 0.2,
   'item_dropout': 0.8,
+}
+
+str_config_yelp = {
+  'loss': 'ccl',
+  'lr': 1e-4,
+  'ccl_neg_num': 300,
+  'ccl_neg_margin': 0.4,
+  'ccl_neg_weight': 50,
+  'weight_decay': 1e-6,
+  'batch_size': 512,
+  'n_epoch': 100,
+  'latent_dim': 256,
+  'affinity': 'dot',
+  'aggregate': 'mean',
+  # 'attention_head': 8,
+  'aggregate_w': 0.8,
+  'dropout': 0.1,
+  'n_interactive_items': 32,
+  'popular_alpha': 0.1,
+  'item_dropout': 0.9,
 }
 
 str_config_best_yelp = {
@@ -144,25 +163,9 @@ simplex_config_1 = {
 sweep_configuration = {
   'method': 'grid',
   'name': 'MF-CCL-YELP',
-  'metric': {'goal': 'maximize', 'name': 'Recall'},
-  'parameters': {
-    'loss': {'value': 'ccl'},
-    'lr': {'value': 0.0001},
-    'ccl_neg_num': {'value': 300},
-    'ccl_neg_margin': {'value': 0.4},
-    'ccl_neg_weight': {'value': 50},
-    'weight_decay': {'value': 1e-6},
-    'batch_size': {'value': 512},
-    'n_epoch': {'value': 30},
-    'affinity': {'value': 'cos'},
-    'n_interactive_items': {'value': 32},
-    'aggregate': {'value': 'self-attention'},
-    'latent_dim': {'value': 256},
-    'attention_head': {'value': 16},
-    # 'aggregate_w': {'values':[0.1, 0.7, 0.3, 0.9]},
-    'dropout': {'value': 0},
-    'item_dropout': {'value': 0.9},
-    'popular_alpha': {'value': 0.2},
-    'aggregate_w': {'values': [0.2, 0.3, 0.4, 0.5]},
-   }
+  'metric': {'goal': 'maximize', 'name': 'Recall'}, 
+  'parameters': {key: {'value': value} for key, value in str_config.items()}
 }
+
+sweep_configuration['parameters']['group_loss_gamma'] = {'values': [0, 0.1, 0.2, 0.3, 0.4, 0.5]}
+sweep_configuration['parameters']['aggregate'] = {'values': ['weighted-sum']}

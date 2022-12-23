@@ -1,6 +1,6 @@
 from flask import Flask, jsonify
-from models import SimpleX
-from utils import RecHelper, load_bili
+from models import STR, SimpleX
+from utils import RecHelper, load_bili_2
 from config import str_config
 import torch
 
@@ -15,8 +15,8 @@ def hello(uid: str):
 
 
 if __name__ == '__main__':
-  data = load_bili()
-  model = SimpleX(data, config=str_config)
+  data = load_bili_2()
+  model = STR(data, config=str_config)
   helper = RecHelper(model, data)
-  model.load_state_dict(torch.load('./output/model.pth'))
+  model.load_state_dict(torch.load('./output/STR-bilibili_model.pth'))
   app.run(host='::', port=5000, debug=True)

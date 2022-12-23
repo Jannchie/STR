@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from tqdm import tqdm
-from utils import USER_COL, ITEM_COL, SCORE_COL
+from utils import USER_COL, ITEM_COL, CNT_COL
 
 from typing import Literal
 
@@ -95,13 +95,13 @@ class BaseModel(torch.nn.Module):
   def item_vec(self, items):
     return self.item_embeds(items)
 
-  def get_loss(self, users, items, SCORE_COLs):
+  def get_loss(self, users, items, CNT_COLs):
     y_pred, y_neg_pred = self.forward(users, items)
-    SCORE_COLs_neg = torch.zeros(y_neg_pred.shape[0]).to(self.device)
+    CNT_COLs_neg = torch.zeros(y_neg_pred.shape[0]).to(self.device)
     if self.loss_function == 'ccl':
       return self.criterion(y_pred, y_neg_pred)
     else:
-      return self.criterion(y_pred, SCORE_COLs) + self.criterion(y_neg_pred, SCORE_COLs_neg) * self.neg_num
+      return self.criterion(y_pred, CNT_COLs) + self.criterion(y_neg_pred, CNT_COLs_neg) * self.neg_num
 
 
 class UltraGCN(BaseModel):
@@ -116,7 +116,7 @@ class UltraGCN(BaseModel):
     u, i, v = \
         torch.tensor(self.train_df[USER_COL].values), \
         torch.tensor(self.train_df[ITEM_COL].values), \
-        torch.tensor(self.train_df[SCORE_COL].values if SCORE_COL in self.train_df else np.ones(len(self.train_df)))
+        torch.tensor(self.train_df[CNT_COL].values if CNT_COL in self.train_df else np.ones(len(self.train_df)))
     self.sp_mat = torch.sparse.LongTensor(torch.stack(
       (u, i)), v, torch.Size([self.users, self.items]))
     self.ui_constraint_mat = self.init_constraint_mat(self.sp_mat)

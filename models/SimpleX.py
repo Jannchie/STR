@@ -21,8 +21,8 @@ class SimpleX(torch.nn.Module):
     self.nuser = helper.nuser
     self.nitem = helper.nitem
     self.latent_dim = config.get('latent_dim', 64)
-    self.item_emb = torch.nn.Embedding(self.nitem + 1, self.latent_dim, padding_idx=self.nitem)
-    self.user_emb = torch.nn.Embedding(self.nuser + 1, self.latent_dim, padding_idx=self.nuser)
+    self.item_emb = torch.nn.Embedding(self.nitem + 1, self.latent_dim, padding_idx=self.nitem, max_norm=self.latent_dim)
+    self.user_emb = torch.nn.Embedding(self.nuser + 1, self.latent_dim, padding_idx=self.nuser, max_norm=self.latent_dim)
     torch.nn.init.xavier_normal_(self.user_emb.weight)
     torch.nn.init.xavier_normal_(self.item_emb.weight)
     torch.nn.init.zeros_(self.user_emb.weight[-1, :])
@@ -33,12 +33,14 @@ class SimpleX(torch.nn.Module):
     dropout = config.get('dropout', 0)
     n_interactive_items = config.get('n_interactive_items')
     if 'aggregate' in config and config.get('aggregate_w', 1) != 1:
-      user_top = helper.train_set.groupby('user_id')['item_id'].apply(lambda x: torch.tensor(x.value_counts().index[:n_interactive_items])).to_list()
-      self.user_top_len = torch.tensor([len(x) for x in user_top], device=self.device)
+      user_top_index = helper.train_set.groupby('user_id')['item_id'].apply(lambda x: torch.tensor(x.value_counts().index[:n_interactive_items])).to_list()
+      user_top_count = helper.train_set.groupby('user_id')['item_id'].apply(lambda x: torch.tensor(x.value_counts().values[:n_interactive_items])).to_list()
+      self.user_top_len = torch.tensor([len(x) for x in user_top_index], device=self.device)
       # self.user_top_mask = torch.zeros(self.nuser, n_interactive_items, dtype=torch.bool, device=self.device)
       # for idx, x in enumerate(self.user_top_len):
       #   self.user_top_mask[idx, x:] = True
-      self.user_top = torch.nn.utils.rnn.pad_sequence(user_top, batch_first=True, padding_value=self.nitem).to(self.device)
+      self.user_top_index = torch.nn.utils.rnn.pad_sequence(user_top_index, batch_first=True, padding_value=self.nitem).to(self.device)
+      self.user_top_count = torch.nn.utils.rnn.pad_sequence(user_top_count, batch_first=True, padding_value=0).to(self.device)
 
       if config.get('aggregate', 'mean') == 'self-attention':
         self.attention = torch.nn.MultiheadAttention(latent_dim, attention_head, dropout=dropout, batch_first=True, bias=False).to(self.device)
@@ -112,7 +114,7 @@ class SimpleX(torch.nn.Module):
     Returns:
         torch.Tensor: user embedding. [batch_size, latent_dim]
     """
-    ie = self.item_embedding(self.user_top[u])
+    ie = self.item_embedding(self.user_top_index[u])
     aggregate = self.config.get('aggregate', 'mean')
     if (aggregate == 'mean'):
       e = ie.mean(dim=1)

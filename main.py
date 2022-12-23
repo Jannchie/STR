@@ -7,8 +7,8 @@ from tqdm import tqdm
 
 from loader import TagRecDataset
 from models import STR, SimpleX
-from utils import RecHelper, TagRecHelper, load_bili, load_public, printt, set_seed, USER_COL, ITEM_COL
-from config import str_config, str_config_gowalla, str_config_yelp, simplex_config, sweep_configuration, mf_bpr_config
+from utils import RecHelper, TagRecHelper, load_bili, load_bili_2, load_public, printt, set_seed, USER_COL, ITEM_COL
+from config import str_config, str_config_best_yelp, str_config_gowalla, str_config_yelp, simplex_config, sweep_configuration, mf_bpr_config
 from matplotlib import pyplot as plt
 import random
 
@@ -18,6 +18,7 @@ except Exception:
   use_wandb = False
 use_wandb = True
 
+now = datetime.datetime.now()
 
 def run(model: torch.nn.Module, helper: TagRecHelper, config: dict, dataset: str):
   set_seed(47)
@@ -47,7 +48,8 @@ def run(model: torch.nn.Module, helper: TagRecHelper, config: dict, dataset: str
   current_max = 0
   printt('Start training...')
   best_model  = None
-  best_res = None
+  best_res_df = None
+  best_res_mean_df = None
   for epoch in range(config.get('n_epoch', 10)):
     loader = tqdm(loader, ascii=" #", desc=f"Epoch {epoch+1:02d}", total=len(
       loader), bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt:5s}/{total_fmt:5s} [{elapsed}<{remaining}] {postfix}]")
@@ -57,7 +59,8 @@ def run(model: torch.nn.Module, helper: TagRecHelper, config: dict, dataset: str
     if dataset == 'bilibili':
       rec_list = rec_helper.get_rec_tags('1850091')
       print(f'for 1850091: {rec_list}')
-    res_mean, result_df = helper.test(model)
+    res_df, res_mean_df = helper.test(model, should_mask=dataset != 'bilibili')
+    res_mean = res_mean_df.values[0]
     if use_wandb:
       wandb.log({
         'Recall': res_mean[0],
@@ -69,21 +72,26 @@ def run(model: torch.nn.Module, helper: TagRecHelper, config: dict, dataset: str
         'HitRate': res_mean[6],
       })
     # early stopping & save best model
-    if res_mean[0] > current_max:
-      current_max = res_mean[0]
+    if res_mean[3] > current_max:
+      current_max = res_mean[3]
       best_model = model.state_dict()
-      best_res = result_df
+      best_res_mean_df = res_mean_df
+      best_res_df = res_df
       patience = patience_init
     else:
       patience -= 1
       if patience == 0:
         break
   printt('Training finished.')
-  print(f'Best Recall: {current_max}')
-  print(f'Best result: \n {best_res}')
-  path = f'./output/{model.__class__.__name__}-{dataset}_model.pth'
-  torch.save(best_model, path)
-  print(f'Model saved to {path}')
+  print(f'Best NDCG: {current_max}')
+  print(f'Best result: \n {best_res_mean_df}')
+  
+  should_save = True
+  if should_save:
+    path = f'./output/{model.__class__.__name__}-{dataset}_model.pth'
+    best_res_df.to_csv(f'./output/{model.__class__.__name__}-{dataset}_result_{now.strftime("%Y%m%d%H%M%S")}.csv')
+    torch.save(best_model, path)
+    print(f'Model saved to {path}')
 
 
 def record_neptune_data(neptune_run, res_mean):
@@ -102,10 +110,12 @@ def train(model, optimizer, loader):
     u = u.to(model.device)
     i = i.to(model.device)
     g = g.to(model.device)
-    optimizer.zero_grad()
-    
+    optimizer.zero_grad()    
     with torch.cuda.amp.autocast():
-      loss = model(u, i)
+      if model.__class__.__name__ == 'SimpleX':
+        loss = model(u, i)
+      elif model.__class__.__name__ == 'STR':
+        loss = model(u, i, g)
     scaler.scale(loss).backward()
     # torch.nn.utils.clip_grad_norm_(model.parameters(), 10.)
     scaler.step(optimizer)
@@ -120,22 +130,24 @@ if __name__ == '__main__':
   model_name = 'STR'
   dataset = 'bilibili'
   
-  trd = load_bili() if dataset == 'bilibili' else load_public(dataset)
+  trd = load_bili_2() if dataset == 'bilibili' else load_public(dataset)
   if model_name == 'STR':
     model = STR
   elif model_name == 'SimpleX':
     model = SimpleX
+  
+  sweep = False
+  if not sweep:
+    if use_wandb: wandb.init(project=f"{model_name}-{dataset}", entity="jannchie", name=f"{now.strftime('%Y%m%d%H%M%S')}")
+    if use_wandb: wandb.config.update(config)
+    run(model, trd, config, dataset)
+  else:
+    def run_sweep():
+      wandb.init(name=f"{now.strftime('%Y%m%d%H%M%S')}")
+      run(model, trd, wandb.config, dataset)
 
-  if use_wandb: wandb.init(project=f"{model_name}-{dataset}", entity="jannchie", name=f"{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}")
-  if use_wandb: wandb.config.update(config)
-  run(model, trd, config, dataset)
-
-  # def run_sweep():
-  #   wandb.init(name=f"{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}")
-  #   run(model, trd, wandb.config, dataset)
-
-  # if use_wandb:
-  #   wandb.login()
-  #   sweep_id = wandb.sweep(sweep=sweep_configuration,
-  #                          project=f"{model_name}-{dataset}", entity="jannchie")
-  #   wandb.agent(sweep_id, function=run_sweep)
+    if use_wandb:
+      wandb.login()
+      sweep_id = wandb.sweep(sweep=sweep_configuration,
+                            project=f"{model_name}-{dataset}", entity="jannchie")
+      wandb.agent(sweep_id, function=run_sweep)

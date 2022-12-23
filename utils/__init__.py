@@ -15,12 +15,13 @@ from metrics import F1, MAP, MRR, NDCG, HitRate, Precision, Recall
 
 USER_COL = 'user_id'
 ITEM_COL = 'item_id'
-SCORE_COL = 'score'
+CNT_COL = 'cnt'
 SEED = 42
 GROUP_COL = 'item_group'
 
 class TagRecHelper:
-    def __init__(self, train_set, test_set, uid2idx, iid2idx, gid2idx):
+    def __init__(self, train_set, test_set, uid2idx, iid2idx, gid2idx, group_dict=None):
+        self.group_dict = group_dict
         self.train_set = train_set
         self.test_set = test_set
         self.uid2idx = uid2idx
@@ -38,10 +39,10 @@ class TagRecHelper:
         users = torch.arange(0, self.nuser, dtype=torch.long)
         self.ul = DataLoader(users, batch_size=128, pin_memory=True)
         
-    def test(self, model):
+    def test(self, model, should_mask=True):
         res_list = []
         for u in tqdm(self.ul, ascii=" #", desc="Test    ", total=len(self.ul), bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt:5s}/{total_fmt:5s} [{elapsed}<{remaining}] {postfix}"):
-            res = model.recommend(u, mask=self.mask)
+            res = model.recommend(u, mask=self.mask if should_mask else None)
             res_list.append(res)
         res_list = torch.cat(res_list, dim=0).tolist()
         # print(res_list[3])
@@ -49,13 +50,16 @@ class TagRecHelper:
         k = 20
         h = ['Recall', 'Precision', 'F1', 'NDCG', 'MAP', 'MRR', 'HitRate']
         f = [Recall(k), Precision(k), F1(k), NDCG(k), MAP(k), MRR(k), HitRate(k)]
-        res_mean = [ np.mean([m(res_list[i], self.truth[i]) for i in range(len(res_list))]) for m in f ]
-        result_df = pd.DataFrame([res_mean], columns=h)
-        print('Test Result:', result_df, '', sep='\n')
-        return res_mean, result_df
+        res = [[m(res_list[i], self.truth[i]) for i in range(len(res_list))] for m in f ]
+        res_df = pd.DataFrame(np.array(res).T, columns=h, index=[self.uidx2id[i] for i in range(self.nuser)])
+        res_df = res_df.sort_index()
+        res_mean = [np.mean(r) for r in res]
+        res_mean_df = pd.DataFrame([res_mean], columns=h)
+        print('Test Result:', res_mean_df, '', sep='\n')
+        return res_df, res_mean_df
 
-    def test_target_user(self, model, u):
-        res = model.recommend(torch.tensor([u]), mask=self.mask)
+    def test_target_user(self, model, u, should_mask=True):
+        res = model.recommend(torch.tensor([u]), mask=self.mask if should_mask else None)
         res_list = res.tolist()
         k = 20
         h = ['Recall', 'Precision', 'F1', 'NDCG', 'MAP', 'MRR', 'HitRate']
@@ -106,6 +110,37 @@ def load_public(name: Literal['ml-1m', 'amazon-book', 'yelp2018', 'gowalla']) ->
         df.loc[:, GROUP_COL] = df[GROUP_COL].apply(lambda x: gid2idx.get(x, -1))
     return TagRecHelper(train, test, uid2idx, iid2idx, gid2idx)
 
+def load_bili_2() -> TagRecHelper:
+    if os.path.exists('./data/bilibili/bilib-ds'):
+        print('Loading bilibili tag dataset from pickle...')
+        return pickle.load(open('./data/bilibili/bilib-ds', 'rb'))
+    print("Loading bilibili tag dataset...")
+    data = []
+    with open('./db/video_data.csv','r', encoding='utf-8-sig') as f:
+        for line in tqdm(f):
+            row = line.rstrip().split(',')
+            mid, gid, tags = row[0], row[1], row[2:]
+            data.append([mid, gid, tags])
+    df = pd.DataFrame(data, columns=[USER_COL, GROUP_COL, ITEM_COL])
+    df = df[df[USER_COL].map(df[USER_COL].value_counts()) > 1]
+    train_set, test_set, _, _ = train_test_split(df, df[USER_COL], test_size=df[USER_COL].nunique(), stratify=df[USER_COL])
+    group_dict = train_set.set_index(GROUP_COL)[ITEM_COL].to_dict()
+    
+    train_set = train_set.explode(ITEM_COL)
+    test_set = test_set.explode(ITEM_COL)
+    
+    uid2idx = {uid: i for i, uid in enumerate(train_set[USER_COL].unique())}
+    iid2idx = {iid: i for i, iid in enumerate(train_set[ITEM_COL].unique())}
+    gid2idx = {gid: i for i, gid in enumerate(train_set[GROUP_COL].unique())}
+    group_dict = {gid2idx[gid]: [iid2idx[iid] for iid in iids] for gid, iids in group_dict.items()}
+    for df in [train_set, test_set]:
+        df.loc[:, USER_COL] = df[USER_COL].apply(lambda x: uid2idx.get(x, len(uid2idx)))
+        df.loc[:, ITEM_COL] = df[ITEM_COL].apply(lambda x: iid2idx.get(x, len(iid2idx)))
+        df.loc[:, GROUP_COL] = df[GROUP_COL].apply(lambda x: gid2idx.get(x, len(gid2idx)))
+    ds = TagRecHelper(train_set, test_set, uid2idx, iid2idx, gid2idx, group_dict)
+    pickle.dump(ds, open('./data/bilibili/bilib-ds', 'wb'))
+    return ds
+
 def load_bili() -> TagRecHelper:
     print("Loading bilibili tag dataset...")
     data = []
@@ -117,24 +152,23 @@ def load_bili() -> TagRecHelper:
             mid, aid, tags = row[0], row[1], row[2:]
             data.append([mid, aid, tags])
     df = pd.DataFrame(data, columns=[USER_COL, GROUP_COL, ITEM_COL])
-    df = df[df['user_id'].map(df['user_id'].value_counts()) > 1]
+    df = df[df[USER_COL].map(df[USER_COL].value_counts()) > 1]
     temp = df.explode(ITEM_COL)
     uid2idx = {uid: i for i, uid in enumerate(temp[USER_COL].unique())}
     iid2idx = {iid: i for i, iid in enumerate(temp[ITEM_COL].unique())}
     gid2idx = {iid: i for i, iid in enumerate(temp[GROUP_COL].unique())}
 
-    train_set, test_set, _, _ = train_test_split(df, df['user_id'], test_size=df['user_id'].nunique(), stratify=df['user_id'])
+    train_set, test_set, _, _ = train_test_split(df, df[USER_COL], test_size=df[USER_COL].nunique(), stratify=df[USER_COL])
     train_set = train_set.explode(ITEM_COL)
     test_set = test_set.explode(ITEM_COL)
     for df in [train_set, test_set]:
         df.loc[:, USER_COL] = df[USER_COL].apply(lambda x: uid2idx.get(x, -1))
         df.loc[:, ITEM_COL] = df[ITEM_COL].apply(lambda x: iid2idx.get(x, -1))
         df.loc[:, GROUP_COL] = df[GROUP_COL].apply(lambda x: gid2idx.get(x, -1))
-
-
     ds = TagRecHelper(train_set, test_set, uid2idx, iid2idx, gid2idx)
     ds.mask = None
     pickle.dump(ds, open('./data/bilibili/bilib-ds', 'wb'))
+    
     return ds
     
 def load_ml_1m_df(type: Literal['train', 'test'] = 'train'):
@@ -147,7 +181,7 @@ def load_bili_small(type: Literal['train', 'test'] = 'train'):
     if os.path.exists(f'./data/bilibili/mt8-{type}'):
         return pd.read_pickle(f'./data/bilibili/mt8-{type}')
     df = pd.read_csv('./data/bilibili/mt8.csv', names=[USER_COL, ITEM_COL, GROUP_COL])
-    df[SCORE_COL] = 1
+    df[CNT_COL] = 1
     train, test = python_stratified_split(df, ratio=[0.8, 0.2], filter_by='user', min_rating=10, col_user=USER_COL, col_item=ITEM_COL)
     uid2idx = {uid: i for i, uid in enumerate(train[USER_COL].unique())}
     iid2idx = {iid: i for i, iid in enumerate(train[ITEM_COL].unique())}
