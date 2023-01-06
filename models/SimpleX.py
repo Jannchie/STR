@@ -32,18 +32,25 @@ class SimpleX(torch.nn.Module):
     attention_head = config.get('attention_head', 1)
     dropout = config.get('dropout', 0)
     n_interactive_items = config.get('n_interactive_items')
-    if 'aggregate' in config and config.get('aggregate_w', 1) != 1:
-      user_top_index = helper.train_set.groupby('user_id')['item_id'].apply(lambda x: torch.tensor(x.value_counts().index[:n_interactive_items])).to_list()
-      user_top_count = helper.train_set.groupby('user_id')['item_id'].apply(lambda x: torch.tensor(x.value_counts().values[:n_interactive_items])).to_list()
-      self.user_top_len = torch.tensor([len(x) for x in user_top_index], device=self.device)
-      # self.user_top_mask = torch.zeros(self.nuser, n_interactive_items, dtype=torch.bool, device=self.device)
-      # for idx, x in enumerate(self.user_top_len):
-      #   self.user_top_mask[idx, x:] = True
-      self.user_top_index = torch.nn.utils.rnn.pad_sequence(user_top_index, batch_first=True, padding_value=self.nitem).to(self.device)
-      self.user_top_count = torch.nn.utils.rnn.pad_sequence(user_top_count, batch_first=True, padding_value=0).to(self.device)
+    
+    # if 'aggregate' in config and config.get('cf_w', 1) != 1:
+    user_top_index = helper.train_set.groupby('user_id')['item_id'].apply(lambda x: torch.tensor(x.value_counts().index[:n_interactive_items])).to_list()
+    user_top_count = helper.train_set.groupby('user_id')['item_id'].apply(lambda x: torch.tensor(x.value_counts().values[:n_interactive_items])).to_list()
+    self.user_top_len = torch.tensor([len(x) for x in user_top_index], device=self.device)
+    # self.user_top_mask = torch.zeros(self.nuser, n_interactive_items, dtype=torch.bool, device=self.device)
+    # for idx, x in enumerate(self.user_top_len):
+    #   self.user_top_mask[idx, x:] = True
+    
+    # count > 2
+    # user_top_index = [x[x > 2] for x in user_top_index]
+    # user_top_count = [x[x > 2] for x in user_top_count]
+    
+    self.user_top_index = torch.nn.utils.rnn.pad_sequence(user_top_index, batch_first=True, padding_value=self.nitem).to(self.device)
+    self.user_top_count = torch.nn.utils.rnn.pad_sequence(user_top_count, batch_first=True, padding_value=0).to(self.device)
 
-      if config.get('aggregate', 'mean') == 'self-attention':
-        self.attention = torch.nn.MultiheadAttention(latent_dim, attention_head, dropout=dropout, batch_first=True, bias=False).to(self.device)
+    if config.get('aggregate', 'mean') == 'self-attention':
+      self.attention = torch.nn.MultiheadAttention(latent_dim, attention_head, dropout=dropout, batch_first=True, bias=False).to(self.device)
+    
     self.user_dropout = torch.nn.Dropout(dropout).to(self.device)
     item_count = self.helper.train_set.groupby('item_id')['user_id'].count().values
     item_count = item_count ** config.get('popular_alpha', 0)
@@ -54,11 +61,13 @@ class SimpleX(torch.nn.Module):
     """Return affinity between user and item.
     Args:
         u(torch.FloatTensor): user embedding. [batch_size, latent_dim]
-        i(torch.FloatTensor): item embedding. [batch_size, latent_dim]
+        i(torch.FloatTensor): item embedding. [batch_size, n, latent_dim] or [batch_size, latent_dim]
     Returns:
         pred(torch.FloatTensor): affinity between user and item. [batch_size,]
     """
-    return torch.mul(ue, ie).sum(dim=1)
+    if len(ie.shape) == 2:
+      return torch.mul(ue, ie).sum(dim=1)
+    return torch.bmm(ue.unsqueeze(1), ie.transpose(1, 2)).squeeze().sum(dim=1)
 
   def bpr_loss(self, ue: torch.Tensor, ie: torch.Tensor, je: torch.Tensor) -> torch.Tensor:
     x_ui = torch.mul(ue, ie).sum(dim=1)
@@ -67,7 +76,7 @@ class SimpleX(torch.nn.Module):
     log_prob = F.logsigmoid(x_uij)
     return -log_prob
 
-  def ccl_loss(self, ue: torch.Tensor, ie: torch.Tensor, neg_ie: torch.Tensor, margin=0.8, neg_w=0):
+  def loss_fn(self, ue: torch.Tensor, ie: torch.Tensor, neg_ie: torch.Tensor, margin=0.8, neg_w=0):
     """ Return cosine contractive loss.
 
     Args:
@@ -97,7 +106,7 @@ class SimpleX(torch.nn.Module):
     Returns:
         pred(torch.FloatTensor): user embedding. [batch_size, latent_dim]
     """
-    w = self.config.get('aggregate_w', 1)
+    w = self.config.get('cf_w', 1)
     eu = self.user_emb(u)
     if 'aggregate' in self.config and w != 1:
       eui = self.user_item_embedding(u)
@@ -117,7 +126,8 @@ class SimpleX(torch.nn.Module):
     ie = self.item_embedding(self.user_top_index[u])
     aggregate = self.config.get('aggregate', 'mean')
     if (aggregate == 'mean'):
-      e = ie.mean(dim=1)
+      mask = ie.sum(dim=-1) != 0
+      e = ie.sum(dim=1) / (mask.float().sum(dim=-1, keepdim=True) + 1.e-12)
     elif (aggregate == 'self-attention'):
       e = self.attention(ie, ie, ie, need_weights=False)[0].mean(dim=1)
     return e
@@ -147,10 +157,10 @@ class SimpleX(torch.nn.Module):
       je = self.item_embedding(torch.randint(0, self.nitem, (len(ie),), device=self.device))
       return self.bpr_loss(ue, ie, je)
     elif (loss == 'ccl'):
-      # neg_idx = torch.randint(0, self.nitem, (ue.shape[0] * self.config.get('ccl_neg_num', 0),), device=self.device)
-      neg_idx = self.item_dist.multinomial(num_samples=(ue.shape[0] * self.config.get('ccl_neg_num', 0)), replacement=True)
+      # neg_idx = torch.randint(0, self.nitem, (ue.shape[0] * self.config.get('loss_neg_n', 0),), device=self.device)
+      neg_idx = self.item_dist.multinomial(num_samples=(ue.shape[0] * self.config.get('loss_neg_n', 0)), replacement=True)
       neg_ie = self.item_embedding(neg_idx).view(-1, self.config.get('latent_dim', 64))
-      return self.ccl_loss(ue, ie, neg_ie, margin=self.config.get('ccl_neg_margin', 0), neg_w=self.config.get('ccl_neg_weight', 0))
+      return self.loss_fn(ue, ie, neg_ie, margin=self.config.get('loss_neg_k', 0), neg_w=self.config.get('loss_neg_w', 0))
     else:
       raise ValueError('loss function is not supported')
 
@@ -183,4 +193,4 @@ class SimpleX(torch.nn.Module):
     if mask:
       for i, m in enumerate(u):
         x_ui[i][mask[m]] = -1e4
-    return torch.topk(x_ui, k=k, dim=1)[1]
+    return torch.topk(x_ui, k=k, dim=1)

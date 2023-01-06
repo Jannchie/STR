@@ -137,3 +137,6 @@ train.csv
 test.csv
 .neptune
 bilib-ds
+results
+*.pkl
+*.tex

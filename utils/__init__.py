@@ -42,7 +42,7 @@ class TagRecHelper:
     def test(self, model, should_mask=True):
         res_list = []
         for u in tqdm(self.ul, ascii=" #", desc="Test    ", total=len(self.ul), bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt:5s}/{total_fmt:5s} [{elapsed}<{remaining}] {postfix}"):
-            res = model.recommend(u, mask=self.mask if should_mask else None)
+            res = model.recommend(u, mask=self.mask if should_mask else None)[1]
             res_list.append(res)
         res_list = torch.cat(res_list, dim=0).tolist()
         # print(res_list[3])
@@ -59,7 +59,7 @@ class TagRecHelper:
         return res_df, res_mean_df
 
     def test_target_user(self, model, u, should_mask=True):
-        res = model.recommend(torch.tensor([u]), mask=self.mask if should_mask else None)
+        res = model.recommend(torch.tensor([u]), mask=self.mask if should_mask else None)[1]
         res_list = res.tolist()
         k = 20
         h = ['Recall', 'Precision', 'F1', 'NDCG', 'MAP', 'MRR', 'HitRate']
@@ -81,8 +81,8 @@ class RecHelper:
     if id not in self.data.uid2idx:
       return []
     idx = self.data.uid2idx[id]
-    tag_idxs = [int(x) for x in self.model.recommend(torch.tensor([idx]))[0]]
-    return [self.get_name(self.data.iidx2id[i]) for i in tag_idxs[:n]]
+    tag_idxs = [int(x) for x in self.model.recommend(torch.tensor([idx]))[1][0]]
+    return [{'id': int(self.data.iidx2id.get(i)), 'name': self.get_name(self.data.iidx2id.get(i))} for i in tag_idxs[:n] if i != '']
 
 def printt(arg0):
   print('*' * 20)
@@ -99,6 +99,9 @@ def set_seed(seed=42):
     print(f"{'Seed:':20} {seed}")
 
 def load_public(name: Literal['ml-1m', 'amazon-book', 'yelp2018', 'gowalla']) -> TagRecHelper:
+    if os.path.exists(f'./data/gowalla/{name}.pkl'):
+        print(f"Loading public {name} dataset...")
+        return pickle.load(open(f'./data/gowalla/{name}.pkl', 'rb'))
     print(f"Loading public {name} dataset...")
     train, test = load_df_from_public_txt(name, 'train'), load_df_from_public_txt(name, 'test')
     uid2idx = {uid: i for i, uid in enumerate(train[USER_COL].unique())}
@@ -108,8 +111,9 @@ def load_public(name: Literal['ml-1m', 'amazon-book', 'yelp2018', 'gowalla']) ->
         df.loc[:, USER_COL] = df[USER_COL].apply(lambda x: uid2idx.get(x, -1))
         df.loc[:, ITEM_COL] = df[ITEM_COL].apply(lambda x: iid2idx.get(x, -1))
         df.loc[:, GROUP_COL] = df[GROUP_COL].apply(lambda x: gid2idx.get(x, -1))
-    return TagRecHelper(train, test, uid2idx, iid2idx, gid2idx)
-
+    helper = TagRecHelper(train, test, uid2idx, iid2idx, gid2idx)
+    pickle.dump(helper, open(f'./data/gowalla/{name}.pkl', 'wb'))
+    return helper
 def load_bili_2() -> TagRecHelper:
     if os.path.exists('./data/bilibili/bilib-ds'):
         print('Loading bilibili tag dataset from pickle...')

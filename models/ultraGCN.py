@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from tqdm import tqdm
-from utils import USER_COL, ITEM_COL, CNT_COL
+from utils import USER_COL, ITEM_COL, CNT_COL, TagRecHelper
 
 from typing import Literal
 
@@ -24,37 +24,36 @@ class HParams:
 
 
 class BaseModel(torch.nn.Module):
-  def __init__(self, train_df, test_df, users: int, items: int, hparams: HParams):
+  def __init__(self, helper: TagRecHelper, config: dict):
     super().__init__()
     self.name = 'baseMF'
     self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     self.test_loader = None
-    self.train_df = train_df
+    self.train_df = helper.train_set
     self.u_d = torch.tensor(self.train_df.groupby(
       USER_COL).agg({ITEM_COL: 'count'}).values).view(-1)
     self.i_d = torch.tensor(self.train_df.groupby(
       ITEM_COL).agg({USER_COL: 'count'}).values).view(-1)
-    self.test_df = test_df
-    self.users = users
-    self.items = items
-    self.neg_num = hparams.neg_num
-    self.w1 = hparams.w1
-    self.w2 = hparams.w2
-    self.wii = hparams.wii
-    self.neg_w = hparams.neg_w
+    self.test_df = helper.test_set
+    self.users = helper.nuser
+    self.items = helper.nitem
+    self.neg_num = config.get('loss_neg_k', 300)
+    self.w1 = config.get('w1', 0.00001)
+    self.w2 = config.get('w2', 1)
+    self.wii = config.get('wii', 2)
+    self.neg_w = config.get('loss_neg_w', 300)
 
-    self.loss_func = hparams.loss_function
-    self.latent_factors = hparams.latent_factors
+    self.loss_func = config.get('loss', 'ccl')
+    self.latent_factors = config.get('latent_dim', 128)
     self.user_embeds = torch.nn.Embedding(
-      users, hparams.latent_factors, device=self.device)
+      self.users, self.latent_factors, device=self.device)
     self.item_embeds = torch.nn.Embedding(
-      items, hparams.latent_factors, device=self.device)
+      self.items, self.latent_factors, device=self.device)
 
     self.init_weights()
     self.all_items = torch.arange(self.items, device=self.device)
     self.cosine_similarity = torch.nn.CosineSimilarity(dim=1, eps=1e-08)
-    self.method = hparams.method
-    self.loss_function = hparams.loss_function
+    self.method = config.get('affinity', 'cos')
     if self.loss_func == 'L1':
       self.criterion = torch.nn.L1Loss()
     elif self.loss_func == 'mse':
@@ -71,8 +70,8 @@ class BaseModel(torch.nn.Module):
     print(f'Users: {self.users}, Items: {self.items}, Latent factors: {self.latent_factors}, Method: {self.method}, loss func: {self.loss_func}')
 
   def init_weights(self):
-    torch.nn.init.normal_(self.user_embeds.weight, std=1e-3)
-    torch.nn.init.normal_(self.item_embeds.weight, std=1e-3)
+    torch.nn.init.normal_(self.user_embeds.weight, std=1e-4)
+    torch.nn.init.normal_(self.item_embeds.weight, std=1e-4)
 
   def forward(self, users, items):
     uv = self.user_vec(users)
@@ -98,7 +97,7 @@ class BaseModel(torch.nn.Module):
   def get_loss(self, users, items, CNT_COLs):
     y_pred, y_neg_pred = self.forward(users, items)
     CNT_COLs_neg = torch.zeros(y_neg_pred.shape[0]).to(self.device)
-    if self.loss_function == 'ccl':
+    if self.loss_func == 'ccl':
       return self.criterion(y_pred, y_neg_pred)
     else:
       return self.criterion(y_pred, CNT_COLs) + self.criterion(y_neg_pred, CNT_COLs_neg) * self.neg_num
@@ -106,35 +105,35 @@ class BaseModel(torch.nn.Module):
 
 class UltraGCN(BaseModel):
 
-  def __init__(self, train_df, test_df,
-               users: int, items: int,
-               hparams: HParams):
-    super().__init__(train_df, test_df, users, items, hparams)
+  def __init__(self, helper: TagRecHelper, config: dict):
+    super().__init__(helper, config)
     self.name = 'UltraGCN'
     self.use_ii = False
-    self.use_uu = True
+    self.use_uu = False
     u, i, v = \
         torch.tensor(self.train_df[USER_COL].values), \
         torch.tensor(self.train_df[ITEM_COL].values), \
         torch.tensor(self.train_df[CNT_COL].values if CNT_COL in self.train_df else np.ones(len(self.train_df)))
+    
     self.sp_mat = torch.sparse.LongTensor(torch.stack(
       (u, i)), v, torch.Size([self.users, self.items]))
+    
     self.ui_constraint_mat = self.init_constraint_mat(self.sp_mat)
-    self.ii_mat = torch.sparse.mm(
-      self.sp_mat.t().float(), self.sp_mat.float()).to(self.device)
-    self.ii_constraint_mat = self.init_constraint_mat(self.ii_mat)
-    self.uu_mat = torch.sparse.mm(
-      self.sp_mat.float(), self.sp_mat.t().float()).to(self.device)
-    self.uu_constraint_mat = self.init_constraint_mat(self.uu_mat)
+    # self.ii_mat = torch.sparse.mm(
+    #   self.sp_mat.t().float(), self.sp_mat.float()).to(self.device)
+    # self.ii_constraint_mat = self.init_constraint_mat(self.ii_mat)
+    # self.uu_mat = torch.sparse.mm(
+    #   self.sp_mat.float(), self.sp_mat.t().float()).to(self.device)
+    # self.uu_constraint_mat = self.init_constraint_mat(self.uu_mat)
 
-    # if self.use_ii:
-    #     self.ii_mat = torch.sparse.mm(self.sp_mat.t().float(), self.sp_mat.float()).to(self.device)
-    #     self.ii_constraint_mat = self.init_constraint_mat(self.ii_mat)
-    #     self.init_ii('item')
-    # elif self.use_uu:
-    #     self.ii_mat = torch.sparse.mm(self.sp_mat.float(), self.sp_mat.t().float()).to(self.device)
-    #     self.ii_constraint_mat = self.init_constraint_mat(self.ii_mat)
-    #     self.init_ii('user')
+    if self.use_ii:
+        self.ii_mat = torch.sparse.mm(self.sp_mat.t().float(), self.sp_mat.float()).to(self.device)
+        self.ii_constraint_mat = self.init_constraint_mat(self.ii_mat)
+        self.init_ii('item')
+    elif self.use_uu:
+        self.ii_mat = torch.sparse.mm(self.sp_mat.float(), self.sp_mat.t().float()).to(self.device)
+        self.ii_constraint_mat = self.init_constraint_mat(self.ii_mat)
+        self.init_ii('user')
 
     # item_neibers = defaultdict(list)
     # for user_id in tqdm(range(self.users), total=self.users):
@@ -142,8 +141,8 @@ class UltraGCN(BaseModel):
     #     neibors = items.indices()
     #     for item in neibors:
     #         item_neibers[]
-    for user in range(users):
-      self.sp_mat[user].coalesce().indices()
+    for u in range(self.users):
+      self.sp_mat[u].coalesce().indices()
 
     if self.loss_func == 'L1':
       self.criterion = torch.nn.L1Loss(reduction='none')
@@ -170,8 +169,8 @@ class UltraGCN(BaseModel):
   def init_constraint_mat(self, sp_mat):
     di = torch.sparse.sum(sp_mat, dim=0).values()
     dj = torch.sparse.sum(sp_mat, dim=1).values()
-    b_dj = (torch.sqrt(dj + 1) / dj)
     b_di = (1 / torch.sqrt(di + 1))
+    b_dj = (torch.sqrt(dj + 1) / dj)
     return {"beta_ud": b_dj.reshape(-1).to(self.device), "beta_id": b_di.reshape(-1).to(self.device)}
 
   def get_omegas(self, users: torch.Tensor, items: torch.Tensor):
@@ -213,8 +212,7 @@ class UltraGCN(BaseModel):
     scores_neg = torch.zeros(y_neg_pred.shape[0]).to(self.device)
     neg_loss = self.criterion(y_neg_pred, scores_neg).reshape(
       self.neg_num, -1) * neg_omegas.reshape(self.neg_num, -1)
-    loss = (self.criterion(y_pred, scores) * pos_omegas +
-            neg_loss.mean(dim=0) * self.neg_w).sum()
+    loss = (self.criterion(y_pred, scores) * pos_omegas + neg_loss.mean(dim=0) * self.neg_w).sum()
     loss += self.get_uu_loss(users)
     loss += self.get_ii_loss(items)
     return loss
