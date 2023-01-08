@@ -12,7 +12,7 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from metrics import F1, MAP, MRR, NDCG, HitRate, Precision, Recall
-
+import scipy.sparse as sp 
 USER_COL = 'user_id'
 ITEM_COL = 'item_id'
 CNT_COL = 'cnt'
@@ -20,7 +20,7 @@ SEED = 42
 GROUP_COL = 'item_group'
 
 class TagRecHelper:
-    def __init__(self, train_set, test_set, uid2idx, iid2idx, gid2idx, group_dict=None):
+    def __init__(self, train_set, test_set, uid2idx, iid2idx, gid2idx=None, group_dict=None):
         self.group_dict = group_dict
         self.train_set = train_set
         self.test_set = test_set
@@ -29,10 +29,12 @@ class TagRecHelper:
         self.gid2idx = gid2idx
         self.nuser = len(uid2idx)
         self.nitem = len(iid2idx)
-        self.ntag = len(gid2idx)
+        self.ngroup = 0 if gid2idx is None else len(gid2idx)
         self.uidx2id = {i: uid for uid, i in uid2idx.items()}
         self.iidx2id = {i: iid for iid, i in iid2idx.items()}
-        self.gidx2id = {i: gid for gid, i in gid2idx.items()}
+        if gid2idx:
+            self.ngroup = len(gid2idx)
+            self.gidx2id = {i: gid for gid, i in gid2idx.items()}
         truth_dict = self.test_set.groupby(USER_COL)[ITEM_COL].apply(list).to_dict()
         self.truth = [truth_dict.get(uid, []) for uid in range(self.nuser)]
         self.mask = self.train_set.groupby(USER_COL)[ITEM_COL].apply(list).to_list()
@@ -99,20 +101,18 @@ def set_seed(seed=42):
     print(f"{'Seed:':20} {seed}")
 
 def load_public(name: Literal['ml-1m', 'amazon-book', 'yelp2018', 'gowalla']) -> TagRecHelper:
-    if os.path.exists(f'./data/gowalla/{name}.pkl'):
+    if os.path.exists(f'./data/{name}/{name}.pkl'):
         print(f"Loading public {name} dataset...")
-        return pickle.load(open(f'./data/gowalla/{name}.pkl', 'rb'))
+        return pickle.load(open(f'./data/{name}/{name}.pkl', 'rb'))
     print(f"Loading public {name} dataset...")
     train, test = load_df_from_public_txt(name, 'train'), load_df_from_public_txt(name, 'test')
     uid2idx = {uid: i for i, uid in enumerate(train[USER_COL].unique())}
     iid2idx = {iid: i for i, iid in enumerate(train[ITEM_COL].unique())}
-    gid2idx = {iid: i for i, iid in enumerate(train[USER_COL].unique())}
     for df in [train, test]:
         df.loc[:, USER_COL] = df[USER_COL].apply(lambda x: uid2idx.get(x, -1))
         df.loc[:, ITEM_COL] = df[ITEM_COL].apply(lambda x: iid2idx.get(x, -1))
-        df.loc[:, GROUP_COL] = df[GROUP_COL].apply(lambda x: gid2idx.get(x, -1))
-    helper = TagRecHelper(train, test, uid2idx, iid2idx, gid2idx)
-    pickle.dump(helper, open(f'./data/gowalla/{name}.pkl', 'wb'))
+    helper = TagRecHelper(train, test, uid2idx, iid2idx)
+    pickle.dump(helper, open(f'./data/{name}/{name}.pkl', 'wb'))
     return helper
 def load_bili_2() -> TagRecHelper:
     if os.path.exists('./data/bilibili/bilib-ds'):

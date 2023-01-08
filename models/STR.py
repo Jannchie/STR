@@ -31,6 +31,7 @@ class STR(torch.nn.Module):
     self.config = config
     self.nuser = helper.nuser
     self.nitem = helper.nitem
+
     self.latent_dim = config.get('latent_dim', 64)
     self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     self.item_emb = torch.nn.Embedding(self.nitem + 1, self.latent_dim, padding_idx=self.nitem, max_norm=self.latent_dim)
@@ -45,9 +46,10 @@ class STR(torch.nn.Module):
     self.attention_head = config.get('attention_head', 1)
 
 
-    user_dropout = config.get('dropout', 0.5)
-    item_dropout = config.get('item_dropout', 0.8)
-    
+    user_dropout = config.get('dropout', 0.8)
+    item_dropout = config.get('item_dropout', 0.1)
+    group_dropout = config.get('group_dropout', 0.1)
+    self.group_dropout = torch.nn.Dropout(group_dropout).to(self.device)
     self.user_dropout = torch.nn.Dropout(user_dropout).to(self.device)
     item_count = self.helper.train_set.groupby('item_id')['user_id'].count().values
     item_count = item_count ** config.get('popular_alpha', 0)
@@ -55,8 +57,8 @@ class STR(torch.nn.Module):
     self.item_dropout = torch.nn.Dropout(item_dropout)
     self.to(self.device)
 
-    self.group_loss_gamma = config.get('group_loss_gamma', 0)
-    if helper.group_dict != None and self.group_loss_gamma > 0:
+    self.w_g = config.get('group_loss_gamma', 0)
+    if helper.group_dict != None and self.w_g > 0:
       self.group_items =  [torch.tensor(helper.group_dict[gid][:10]) for gid in range(len(helper.group_dict))]
       self.group_items = torch.nn.utils.rnn.pad_sequence(self.group_items, batch_first=True, padding_value=self.nitem).to(self.device)
       # self.group_norm = torch.nn.BatchNorm1d(self.group_items.shape[1], device=self.device)
@@ -66,34 +68,31 @@ class STR(torch.nn.Module):
     torch.nn.init.normal_(self.item_emb.weight, std=1e-4)
     torch.nn.init.zeros_(self.user_emb.weight[-1, :])
     torch.nn.init.zeros_(self.item_emb.weight[-1, :])
-    # if 'aggregate' in config and config.get('cf_w', 1) != 1:
-    
-    print('calculate item degree')
+    # if 'aggregate' in config and config.get('w_ii', 1) != 1:
     u, i, v = \
         torch.tensor(helper.train_set[USER_COL].values), \
         torch.tensor(helper.train_set[ITEM_COL].values), \
         torch.tensor(helper.train_set[CNT_COL].values if CNT_COL in helper.train_set else np.ones(len(helper.train_set)))
+   
     self.sp_mat = torch.sparse.LongTensor(torch.stack((u, i)), v, torch.Size([self.nuser, self.nitem]))
-    self.item_deg = torch.sparse.sum(self.sp_mat, dim=0).values().to(self.device)
-    self.item_deg = torch.cat((self.item_deg, torch.tensor([0], device=self.device)))
     
-    train_deg = self.item_deg[helper.train_set[ITEM_COL].values].cpu()
-    helper.train_set['deg'] = train_deg
-    helper.train_set = helper.train_set.sort_values(['user_id', 'deg'], ascending=[True, True])
-    print('preparing top items')
-    user_top_index = helper.train_set.groupby('user_id')['item_id'].apply(lambda x: torch.tensor(x.values[:self.n_interactive_items])).to_list()
-    user_top_count = helper.train_set.groupby('user_id')['deg'].apply(lambda x: torch.tensor(x.values[:self.n_interactive_items])).to_list()
-    self.user_top_index = torch.nn.utils.rnn.pad_sequence(user_top_index, batch_first=True, padding_value=self.nitem).to(self.device)
-    self.user_top_count = torch.nn.utils.rnn.pad_sequence(user_top_count, batch_first=True, padding_value=0).to(self.device)
-    self.user_top_len = torch.tensor([len(x) for x in user_top_index], device=self.device)
-    # self.user_top_mask = torch.zeros(self.nuser, n_interactive_items, dtype=torch.bool, device=self.device)
-    # for idx, x in enumerate(self.user_top_len):
-    #   self.user_top_mask[idx, x:] = True
+    ii_mat = torch.sparse.mm(self.sp_mat.t().float(), self.sp_mat.float())
+    ii_mat = ii_mat.to_dense() * (1 - torch.eye(self.nitem))
+    self.item_top_nei = ii_mat.topk(self.n_interactive_items, dim=1)
+    self.item_top_nei = self.item_top_nei.indices.to(self.device), self.item_top_nei.values.to(self.device)
+    del ii_mat
+    torch.cuda.empty_cache()
+    
+    if helper.ngroup == 0:
+
+      self.ngroup = self.item_top_nei[0].shape[0]
+    else:
+      self.ngroup = helper.ngroup
+    self.group_emb = torch.nn.Embedding(self.ngroup + 1, self.latent_dim, padding_idx=self.ngroup, max_norm=self.latent_dim)
     if config.get('aggregate', 'mean') == 'self-attention':
       self.attention = torch.nn.MultiheadAttention(self.dim, self.attention_head, dropout=item_dropout, batch_first=True, bias=False).to(self.device)
-      
-
-    # append padding
+    print('Finish init model')
+    # append padding  
     # self.cmat = self.init_constraint_mat(self.sp_mat)
 
   def init_constraint_mat(self, sp_mat):
@@ -102,34 +101,7 @@ class STR(torch.nn.Module):
     b_di = (1 / torch.sqrt(di + 1))
     b_dj = (torch.sqrt(dj + 1) / dj)
     return {"beta_ud": b_dj.reshape(-1).to(self.device), "beta_id": b_di.reshape(-1).to(self.device)}
-  
-  # def loss_fn(self, ue: torch.Tensor, ie: torch.Tensor, neg_ie: torch.Tensor):
-  #   """ Return cosine contractive loss.
 
-  #   Args:
-  #       u (torch.Tensor): user embedding. [batch_size, latent_dim]
-  #       i (torch.Tensor): item embedding. [batch_size, latent_dim]
-  #       margin (float, optional): margin. Defaults to 0.8.
-  #       neg_w (int, optional): negative item weight. Defaults to 0.
-
-  #   Returns:
-  #       torch.Tensor: mean loss.
-  #   """
-  #   pos_pred = self.affinity(ue, ie)
-  #   pos_loss = F.relu(1 - pos_pred)
-    
-  #   if self.loss_neg_w == 0:
-  #     return pos_loss
-  #   m = self.config.get('loss_neg_m', 0)
-  #   neg_ie_num = neg_ie.shape[0]
-  #   neg_ue = ue.repeat(1, neg_ie_num // ue.shape[0]).view(-1, self.dim)
-  #   neg_pred = self.affinity(neg_ue, neg_ie).view(-1, neg_ie_num)
-  #   # neg_pred = neg_pred.view(ie.shape[0], -1).topk(self.loss_neg_k)[0]
-  #   neg_loss = F.relu(neg_pred - m).mean(dim=1)
-  #   # return (pos_loss + neg_loss * self.loss_neg_w)
-  #   neg_not_zero_count = (neg_loss != 0).sum()
-  #   return (pos_loss + neg_loss.sum(dim=-1) / (neg_not_zero_count + 1.e-12) * self.loss_neg_w)
-  
   def affinity(self, ue: torch.Tensor, ie: torch.Tensor) -> torch.Tensor:
     """Return affinity between user and item.
     Args:
@@ -153,7 +125,7 @@ class STR(torch.nn.Module):
         torch.Tensor: mean loss.
     """
     pos_pred = self.affinity(ue, ie)
-    return F.relu(1 - pos_pred) ** self.loss_neg_a
+    return F.relu(1 - pos_pred)
   
   def get_neg_loss(self, ue: torch.Tensor, neg_ie: torch.Tensor):
     neg_ie_num = neg_ie.shape[0]
@@ -163,29 +135,6 @@ class STR(torch.nn.Module):
     return neg_loss * self.loss_neg_w
     # neg_not_zero_count = (neg_loss != 0).sum()
     # return neg_loss.sum(dim=-1) / (neg_not_zero_count + 1.e-12) * self.loss_neg_w 
-    
-  # def loss_fn(self, ue: torch.Tensor, ie: torch.Tensor, neg_ie: torch.Tensor):
-  #   """ Return cosine contractive loss.
-
-  #   Args:
-  #       u (torch.Tensor): user embedding. [batch_size, latent_dim]
-  #       i (torch.Tensor): item embedding. [batch_size, latent_dim]
-  #       margin (float, optional): margin. Defaults to 0.8.
-  #       neg_w (int, optional): negative item weight. Defaults to 0.
-
-  #   Returns:
-  #       torch.Tensor: mean loss.
-  #   """
-
-  #   pos_pred = self.affinity(ue, ie)
-  #   pos_loss = torch.relu(1 - pos_pred)
-  #   neg_ie_num = neg_ie.shape[0]
-  #   neg_ue = ue.repeat(1, neg_ie_num // ue.shape[0]).view(-1, self.dim)
-  #   neg_pred = self.affinity(neg_ue, neg_ie).view(-1, neg_ie_num)
-  #   neg_loss = torch.relu(neg_pred - self.loss_neg_m)
-  #   if self.loss_neg_w != 0:
-  #     return (pos_loss + neg_loss.mean(dim=-1) * self.loss_neg_w)
-  #   return (pos_loss + neg_loss.sum(dim=-1))
   
   def user_embedding(self, u: torch.Tensor) -> torch.Tensor:
     """Return user embedding.
@@ -200,6 +149,12 @@ class STR(torch.nn.Module):
       eu = F.normalize(eu)
     return self.user_dropout(eu)
   
+  def group_embedding(self, u: torch.Tensor) -> torch.Tensor:
+    gu = self.group_emb(u)
+    if self.config.get('affinity', 'dot') == 'cos':
+      gu = F.normalize(gu)
+    return self.group_dropout(gu)
+  
   def item_embedding(self, i: torch.Tensor) -> torch.Tensor:
     """Return item embedding.
     Args:
@@ -212,6 +167,32 @@ class STR(torch.nn.Module):
     if self.config.get('affinity', 'dot') == 'cos':
       e = F.normalize(e)
     return e
+  
+  # def user_nei_embedding(self, u: torch.Tensor) -> torch.Tensor:
+  #   return self.nei_embedding(u, self.user_top_nei)
+  
+  def item_nei_embedding(self, i: torch.Tensor) -> torch.Tensor:
+    return self.nei_embedding(i, self.item_top_nei)
+  
+  def nei_embedding(self, idx, nei):
+    e = self.item_emb(nei[0][idx]) # [batch_size, top_k, latent_dim]
+    if self.config.get('affinity', 'dot') == 'cos':
+      e = F.normalize(e)
+    # ie = self.interact_norm(ie)
+    aggregate = self.config.get('aggregate', 'mean')
+    if aggregate == 'mean':
+      e = e.mean(dim=1)
+    elif aggregate == 'self-attention':
+      e = self.attention(e, e, e, need_weights=False)[0]
+      e = e.mean(dim=1)
+    elif aggregate == 'weighted-sum':
+      mask = e.sum(dim=-1) != 0
+      weights = nei[1][idx] ** self.config.get('aggregate_a', 0.75) * mask.float() 
+      weights = weights / weights.sum(dim=1, keepdim=True)
+      e = (e * weights[..., None]).sum(dim=1)
+    e = self.item_dropout(e)
+    return e
+  
   def user_item_embedding(self, u: torch.Tensor) -> torch.Tensor:
     """Return user embedding.
     Args:
@@ -236,7 +217,7 @@ class STR(torch.nn.Module):
       e = e.mean(dim=1)
     elif aggregate == 'weighted-sum':
       mask = ie.sum(dim=-1) != 0
-      weights = self.user_top_count[u] ** self.config.get('weighted-sum-alpha', 0.75) * mask.float() 
+      weights = self.user_top_count[u] ** self.config.get('aggregate_a', 0.75) * mask.float() 
       weights = weights / weights.sum(dim=1, keepdim=True)
       e = (ie * weights[..., None]).sum(dim=1)
     return e
@@ -251,17 +232,8 @@ class STR(torch.nn.Module):
     """
     return self.loss_fn(ue, ie) 
   
-  def reg_loss(self):
-    l = 0
-    emb_reg = get_reg(self.weight_decay)
-    for params in self.parameters():
-      for emb_p, emb_lambda in emb_reg:
-          l += (emb_lambda / emb_p) * torch.norm(params, emb_p) ** emb_p
-    return l
-  
   def forward(self, user: torch.Tensor, item: torch.Tensor, group: torch.Tensor = None):
     """ Return prediction loss.
-
     Args:
         user (torch.Tensor): user index. [batch_size]
         item (torch.Tensor): item index. [batch_size]
@@ -271,38 +243,27 @@ class STR(torch.nn.Module):
     """
     neg_idx = self.item_dist.multinomial(num_samples=(user.shape[0] * self.config.get('loss_neg_n', 0)), replacement=True)
     neg_ie = self.item_embedding(neg_idx).view(-1, self.dim)
-
     ie = self.item_embedding(item)
-    w = self.config.get('cf_w', 1)
-    loss_ii = 0
-    loss_ui = 0
-    if w != 0:
-      ue = self.user_embedding(user)
-      loss_ui = self.get_loss(ue, ie)
-      # loss_ui = self.get_loss(ue, ie, neg_ie)
-    if w != 1:
-      loss_ii = self.get_loss(ue, self.item_emb(self.user_top_index[user]))
-      # uie = self.user_item_embedding(user)
-      # loss_ii = self.get_loss(ue, uie, neg_ie)
-    if self.config.get('auto_gamma', False):
-      gamma = torch.sigmoid(self.user_gamma(user))
-      return (gamma * loss_ui + (1 - gamma) * loss_ii).mean()
+    w_ui = self.config.get('w_ui', 1)
+    # w_uu = self.config.get('w_uu', 1)
+    w_ii = self.config.get('w_ii', 1)
+    w_gi = self.config.get('w_gi', 1)
+    ue = self.user_embedding(user)
+    # ge = self.group_embedding(group)
+    loss_ui = self.get_loss(ue, ie)
+    # nei_items = self.user_top_nei[0][user].view(-1)
+    # loss_uu = self.get_loss(ue.repeat_interleave(self.n_interactive_items, dim=0), self.item_dropout(self.item_emb(nei_items))) if w_uu != 0 else 0
+    loss_ii = self.get_loss(ie, self.item_nei_embedding(item)) if w_ii != 0 else 0
     
+    loss_gi = 0
     loss_g = 0
-    if self.group_loss_gamma > 0 and group is not None:
+    if self.w_g > 0 and group is not None:
       group_items = self.group_items[group]
-      # group_items_embeddings = self.group_norm(self.item_embedding(group_items))
-      # group_items_embeddings = self.item_dropout(group_items_embeddings)
       group_items_embeddings = self.item_dropout(self.item_embedding(group_items))
       loss_g = self.get_loss(ue, group_items_embeddings.mean(dim=1), neg_ie).mean()
       
-    
-    # beta = torch.mul(self.cmat['beta_ud'][user], self.cmat['beta_id'][item])
-    
-    # neg_i_num = neg_ie.shape[0]
-    # neg_u = user.repeat_interleave(neg_i_num // user.shape[0])
-    # beta_neg = torch.mul(self.cmat['beta_ud'][neg_u], self.cmat['beta_id'][neg_idx])
-    return ((w * loss_ui + (1 - w) * loss_ii).mean() * (1 - self.group_loss_gamma)) + loss_g * self.group_loss_gamma + self.get_neg_loss(ue, neg_ie)
+    neg_loss = self.get_neg_loss(ue, neg_ie)
+    return (loss_ui * w_ui + loss_ii * w_ii).mean() + loss_gi * w_gi + loss_g * self.w_g + neg_loss
 
   def rec_by_ii(self, u, k=20, mask=None):
     uie = self.user_item_embedding(u)
@@ -336,7 +297,7 @@ class STR(torch.nn.Module):
     """
     return self.rec_by_ui(u.to(self.device), k, mask)
     # x = 0
-    # w = self.config.get('cf_w', 1)
+    # w = self.config.get('w_ii', 1)
     
     # u = u.to(self.device)
     # if w != 0:

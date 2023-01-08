@@ -10,7 +10,7 @@ str_config = {
   'latent_dim': 128,
   'affinity': 'dot',
   'aggregate': 'weighted-sum',
-  'cf_w': 0.8,
+  'w_ii': 0.8,
   'dropout': 0.2,
   'n_interactive_items': 16,
   'popular_alpha': 0.2,
@@ -31,7 +31,7 @@ str_config_yelp = {
   'affinity': 'cos',
   'aggregate': 'mean',
   # 'attention_head': 8,
-  'cf_w': 0.8,
+  'w_ii': 0.8,
   'dropout': 0.1,
   'n_interactive_items': 32,
   'popular_alpha': 0.1,
@@ -50,7 +50,7 @@ str_config_best_yelp = {
   'latent_dim': 64,
   'affinity': 'cos',
   'aggregate': 'mean',
-  'cf_w': 0.8,
+  'w_ii': 0.8,
   'dropout': 0.1,
   'n_interactive_items': 32,
   'popular_alpha': 0.2,
@@ -59,23 +59,26 @@ str_config_best_yelp = {
 
 
 str_config_gowalla = {
-  'lr': 1e-3,
-  'loss_neg_n': 2000,
-  'loss_neg_a': 1.5,
-  'loss_neg_w': 50,
-  'loss_neg_m': .2,
-  'weight_decay': 0,
+  'lr': 1e-4,
+  'loss_neg_n': 800,
+  'loss_neg_a': 1,
+  'loss_neg_w': 200,
+  'loss_neg_m': .9,
+  'weight_decay': 1e-8,
   'batch_size': 512,
   'affinity': 'cos',
   'n_epoch': 100,
   'latent_dim': 64,
   'aggregate': 'weighted-sum',
-  'cf_w': 0.3,
-  'n_interactive_items': 64,
+  'w_ui': 0.8,
+  'w_ii': 0.2,
+  # 'w_uu': 0.0,
+  'aggregate_a': 0.05,
+  'n_interactive_items': 4,
   'popular_alpha': 0,
   'group_loss_gamma': 0,
-  'dropout': .5,
-  'item_dropout': .5,
+  'dropout': .1,
+  'item_dropout': .1,
 }
 
 simplex_config = {
@@ -91,7 +94,7 @@ simplex_config = {
   'affinity': 'cos',
   # 'n_interactive_items': 32,
   'aggregate': 'mean',
-  'cf_w': 1,
+  'w_ii': 1,
   'dropout': 0.1,
 }
 
@@ -116,7 +119,7 @@ simplex_config_bak = {
   'latent_dim': 256,
   'affinity': 'cos',
   'aggregate': 'mean',
-  'cf_w': 1,
+  'w_ii': 1,
   'dropout': 0.1
 }
 
@@ -133,7 +136,7 @@ str_config_yelp = {
   'affinity': 'cos',
   'aggregate': 'self-attention',
   'attention_head': 16,
-  'cf_w': 0,
+  'w_ii': 0,
   'dropout': 0.1,
   'n_interactive_items': 32,
 }
@@ -151,7 +154,7 @@ simplex_config_1 = {
   'affinity': 'cos',
   'aggregate': 'mean',
   'attention_head': 8,
-  'cf_w': 0,
+  'w_ii': 0,
   'dropout': 0.1,
   'n_interactive_items': 8,
 }

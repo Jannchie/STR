@@ -21,8 +21,8 @@ use_wandb = True
 now = datetime.datetime.now()
 
 def run(model: torch.nn.Module, helper: TagRecHelper, config: dict, dataset: str):
+  # sourcery skip: low-code-quality
   set_seed(47)
-  train_ds = TagRecDataset(helper.train_set)
   # seed = random.randint(0, 100000)
   print('init model...')
   model = model(helper, config=config)
@@ -34,13 +34,11 @@ def run(model: torch.nn.Module, helper: TagRecHelper, config: dict, dataset: str
   print(f'{"Number of items:":20} {model.nitem}')
   if use_wandb:
     wandb.watch(model)
-  loader = DataLoader(train_ds, batch_size=config.get(
-    'batch_size', 512), num_workers=2, shuffle=True, pin_memory=True)
-  
-  # optimizer = torch.optim.Adam(model.parameters(), lr=config.get(
-  #  'lr', 1e-3), weight_decay=config.get('weight_decay', 1e-5))
+  bs = config.get('batch_size', 512)
   lr = config.get('lr', 1e-3)
-  optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=config.get('weight_decay', 0))
+  wd = config.get('weight_decay', 0)
+  loader = DataLoader(TagRecDataset(helper.train_set), batch_size=bs, num_workers=2, shuffle=True, pin_memory=True)
+  optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
   print(optimizer)
   scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=1, verbose=True, factor=0.1, min_lr=lr * 0.01)
   # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5, verbose=True)
@@ -91,6 +89,9 @@ def run(model: torch.nn.Module, helper: TagRecHelper, config: dict, dataset: str
       break
     else:
       patience -= 1
+      # if patience == patience_init - 2:
+      # print(f'Load best model at epoch {epoch}')
+      # model.load_state_dict(best_model)
   printt('Training finished.')
   print(f'Best Recall: {current_max}')
   print(f'Best result: \n {best_res_mean_df}')
@@ -161,8 +162,8 @@ if __name__ == '__main__':
     run(model, trd, config, dataset)
   else:
     sweep_configuration = {
-      'method': 'random',
-      'name': 'loss_neg',
+      'method': 'grid',
+      'name': '230107',
       'metric': {'goal': 'maximize', 'name': 'Recall'}, 
       'parameters': {key: {'value': value} for key, value in config.items()}
     }
@@ -174,21 +175,20 @@ if __name__ == '__main__':
         run(model, trd, wandb.config, dataset)
       if use_wandb:
         wandb.login()
-        sweep_id = wandb.sweep(sweep=sweep_configuration,
-                              project=f"{model_name}-{dataset}", entity="jannchie")
+        sweep_id = wandb.sweep(sweep=sweep_configuration, project=f"{model_name}-{dataset}", entity="jannchie")
         wandb.agent(sweep_id, function=r)
     # sweep_configuration['parameters']['group_loss_gamma'] = {'values': [0, 0.1, 0.2, 0.3, 0.4, 0.5]}
     # sweep_configuration['parameters']['aggregate'] = {'values': ['weighted-sum']}
     # sweep_configuration['parameters']['loss_neg_k'] = {'values': [4, 8, 16, 32, 64]}
-    # sweep_configuration['parameters']['cf_w'] = {'value': 1}
-    sweep_configuration['parameters']['loss_neg_n'] = {'values': [800, 1000, 1200, 1600, 2000]}
-    sweep_configuration['parameters']['dropout'] = {'values': [0.4, 0.5, 0.6, 0.7]}
+    # sweep_configuration['parameters']['w_ii'] = {'value': 1}
+    # sweep_configuration['parameters']['loss_neg_n'] = {'values': [800, 1000, 1200, 1600, 2000]}
+    # sweep_configuration['parameters']['dropout'] = {'value': 0.1}
     # sweep_configuration['parameters']['loss_neg_k'] = {'values': [10, 50, 100, 150, 200, 250, 300, 500]}
-    sweep_configuration['parameters']['loss_neg_m'] = {'values': [0.1, 0.2, 0.3, 0.5, 0.9]}
-    sweep_configuration['parameters']['n_epoch'] = {'value': 100}
-    sweep_configuration['parameters']['cf_w'] = {'values': [0.2, 0.5, 0.8]}
+    sweep_configuration['parameters']['loss_neg_w'] = {'values': [130, 150, 200, 300]}
+    sweep_configuration['parameters']['popular_alpha'] = {'values': [0, 0.2, -0.2]}
+    sweep_configuration['parameters']['n_interactive_items'] = {'values': [4, 8, 16]}
     # sweep_configuration['parameters']['loss_neg_m'] = {'values': [0.0]}
-    # sweep_configuration['parameters']['cf_w'] = {'value': 0.8 }
+    sweep_configuration['parameters']['aggregate_a'] = {'values': [0.2, 0, -0.2] }
     # sweep_configuration['parameters']['loss_neg_w'] = {'values': [30, 40, 50, 60]}
-    sweep_configuration['parameters']['loss_neg_a'] = {'values': [1, 1.2, 1.4, 1.6] }
+    # sweep_configuration['parameters']['loss_neg_a'] = {'values': [] }
     run_sweep()

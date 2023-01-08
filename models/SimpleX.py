@@ -33,7 +33,7 @@ class SimpleX(torch.nn.Module):
     dropout = config.get('dropout', 0)
     n_interactive_items = config.get('n_interactive_items')
     
-    # if 'aggregate' in config and config.get('cf_w', 1) != 1:
+    # if 'aggregate' in config and config.get('w_ii', 1) != 1:
     user_top_index = helper.train_set.groupby('user_id')['item_id'].apply(lambda x: torch.tensor(x.value_counts().index[:n_interactive_items])).to_list()
     user_top_count = helper.train_set.groupby('user_id')['item_id'].apply(lambda x: torch.tensor(x.value_counts().values[:n_interactive_items])).to_list()
     self.user_top_len = torch.tensor([len(x) for x in user_top_index], device=self.device)
@@ -106,7 +106,7 @@ class SimpleX(torch.nn.Module):
     Returns:
         pred(torch.FloatTensor): user embedding. [batch_size, latent_dim]
     """
-    w = self.config.get('cf_w', 1)
+    w = self.config.get('w_ii', 1)
     eu = self.user_emb(u)
     if 'aggregate' in self.config and w != 1:
       eui = self.user_item_embedding(u)
