@@ -11,7 +11,9 @@ helper: RecHelper = None
 @app.route('/tag/<txt>')
 def tag(txt):
   global helper
-  return jsonify([{'score': x[1], 'value': x[0], 'id': int(helper.tag2id.get(x[0],0))} for x in process.extract(txt, helper.tags, limit=10, processor=lambda x: x, scorer=fuzz.ratio)])
+  return jsonify([{'score': x[1], 
+                   'value': x[0], 
+                   'id': int(helper.tag2id.get(x[0],0))} for x in process.extract(txt, helper.tags, limit=10, processor=lambda x: x, scorer=fuzz.ratio)])
 
 @app.route('/<uid>')
 def rec(uid: str):
@@ -25,7 +27,7 @@ def init():
   model = STR(data, config=str_config).eval()
   helper = RecHelper(model, data)
   tag_dict = helper.tag_info
-  helper.tags = list(helper.tag_info.values())[:10000]
+  helper.tags = list(helper.tag_info.values())
   helper.tag2id = {helper.tag_info[k]:k for k in helper.tag_info}
   def search(txt):
     return [d for d in tag_dict if txt in d]

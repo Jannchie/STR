@@ -8,7 +8,7 @@ from tqdm import tqdm
 from loader import TagRecDataset
 from models import MF, STR, SimpleX
 from utils import RecHelper, TagRecHelper, load_bili, load_bili_2, load_public, printt, set_seed, USER_COL, ITEM_COL
-from config import str_config, str_config_best_yelp, str_config_gowalla, str_config_yelp, simplex_config, mf_bpr_config
+from config import str_config, str_config_gowalla, str_config_yelp, simplex_config, mf_bpr_config, str_config_amazon
 from matplotlib import pyplot as plt
 import random
 
@@ -45,12 +45,12 @@ def run(model: torch.nn.Module, helper: TagRecHelper, config: dict, dataset: str
   printt('Hyperparameters')
   for k, v in config.items():
     print(f'{f"{k}:":20} {v}')
-
   if dataset == 'bilibili':
     rec_helper = RecHelper(model, helper)
   patience_init = 5
   patience = patience_init
   current_max = 0
+  # helper.test(model, should_mask=dataset != 'bilibili')
   printt('Start training...')
   best_model  = None
   best_res_df = None
@@ -64,6 +64,10 @@ def run(model: torch.nn.Module, helper: TagRecHelper, config: dict, dataset: str
     if dataset == 'bilibili':
       rec_list = [d['name'] for d in rec_helper.get_rec_tags('1850091')]
       print(f'for 1850091: {rec_list}')
+    
+    model.w_n = 10
+    model.w_a = 0.25
+    model.w_k = 0.05
     res_df, res_mean_df = helper.test(model, should_mask=dataset != 'bilibili')
     res_mean = res_mean_df.values[0]
     scheduler.step(res_mean[0])
@@ -138,16 +142,18 @@ def train(model, optimizer, loader):
 
 if __name__ == '__main__':
   model_name = 'STR'
-  # dataset = 'bilibili'
-  dataset = 'gowalla'
+  dataset = 'bilibili'
+  # dataset = 'yelp2018'
   trd = load_bili_2() if dataset == 'bilibili' else load_public(dataset)
   if model_name == 'STR':
     if dataset == 'bilibili':
       config = str_config
     elif dataset == 'gowalla':
       config = str_config_gowalla
-    else:
-      config = str_config_best_yelp
+    elif dataset == 'yelp2018':
+      config = str_config_yelp
+    elif dataset == 'amazon':
+      config = str_config_amazon
     model = STR
   elif model_name == 'SimpleX':
     config = simplex_config

@@ -10,6 +10,15 @@ sns.set_theme(style="ticks", rc= { 'figure.figsize': (11.7,8.27),})
 sns.set_context("paper", font_scale=2)
 sns.set_palette("Set2")
 from sklearn.decomposition import PCA
+
+#%%
+popular_alpha_df = pd.read_csv('results/popular_alpha.csv')
+popular_alpha_df.to_latex('results/popular_alpha.tex', float_format='%.3f', bold_rows=True)
+plt.ylim(0.57, 0.6)
+sns.barplot(data=popular_alpha_df, x='popular_alpha', y='Recall', linewidth=1, edgecolor=".0", color='C0')
+plt.ylabel('Recall@20')
+plt.xlabel('popular alpha')
+plt.savefig('results/popular_alpha.svg', format='svg', dpi=1200)
 #%%
 path_simplex  ='output/SimpleX-bilibili_result_20221228121203.csv'
 path_str = 'output/STR-bilibili_result_20221231002129.csv'
@@ -40,6 +49,25 @@ improve = (df_mean[2] - df_mean[1]) / df_mean[1]
 df_mean.append(improve)
 new_df = pd.DataFrame(df_mean, index=['STR', 'SimpleX', 'MF', 'Improve'])
 new_df.to_latex('output/STR_VS_SimpleX_VS_MF.tex', float_format='%.3f', bold_rows=True)
+
+#%%
+df = pd.read_csv('results/author_tag_rec_feedbacks.csv', index_col=0)
+sns.violinplot(data=df, x='method', y='relevance', hue="method", linewidth=1, edgecolor=".0", bw=.3, inner="quart", split=True)
+plt.ylim(0, 5)
+
+#%%
+df = pd.read_csv('results/author_tag_rec_recognitions.csv', index_col=0)
+# precent bar stack
+df = df[df['method'] != 'test']
+df = df[df['recognition'] != 0]
+# created_at < 2023-01-01
+df = df[df['created_at'] < '2022-12-30']
+dfs = df.groupby(['m_id', 'recognition', 'method']).size().unstack()
+dfs = dfs[dfs['str'].notna() & dfs['usage'].notna()]
+dfs = df.groupby(['method', 'recognition']).size().unstack()
+dfs = dfs.div(dfs.sum(axis=1), axis=0)
+dfs.plot.bar(stacked=True, color=['C1', 'C0'])
+dfs
 #%%
 dfs = []
 for metric in ['Recall', 'Precision', 'NDCG', 'MAP', 'F1']:
@@ -49,7 +77,7 @@ df = pd.DataFrame(dfs, columns=['Metric', 'Value', 'Type'])
 # Load the example tips dataset
 tips = sns.load_dataset("tips")
 
-sns.violinplot(data=df,x="Metric", y="Value", hue="Type",
+sns.barplot(data=df,x="Metric", y="Value", hue="Type",
                split=True, inner="quart", bw=.3, cut=0, linewidth=1)
 plt.ylim(0, 1)
 plt.legend(bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0)
