@@ -9,7 +9,7 @@ str_config = {
   'latent_dim': 128,
   'affinity': 'dot',
   'aggregate': 'weighted-sum',
-  'w_cf': .8,
+  'w_cf': 0.8,
   'w_h': .2,
   'w_g': .2,
   'dropout': .2,

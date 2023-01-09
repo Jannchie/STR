@@ -140,3 +140,5 @@ bilib-ds
 results
 *.pkl
 *.tex
+
+.history

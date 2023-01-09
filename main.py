@@ -120,17 +120,17 @@ def train(model, optimizer, loader):
     i = i.to(model.device)
     g = g.to(model.device)
     optimizer.zero_grad()    
-    # with torch.cuda.amp.autocast():
-    if model.__class__.__name__ in ['SimpleX', 'MF']:
-      loss = model(u, i)
-    elif model.__class__.__name__ == 'STR':
-      loss = model(u, i, g)
-    # scaler.scale(loss).backward()
-    # scaler.step(optimizer)
-    # scaler.update()
-    loss.backward()
-    optimizer.step()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 10.)
+    with torch.cuda.amp.autocast():
+      if model.__class__.__name__ in ['SimpleX', 'MF']:
+        loss = model(u, i)
+      elif model.__class__.__name__ == 'STR':
+        loss = model(u, i, g)
+    scaler.scale(loss).backward()
+    # torch.nn.utils.clip_grad_norm_(model.parameters(), 10.)
+    scaler.step(optimizer)
+    scaler.update()
+    # loss.backward()
+    # optimizer.step()
     loader.set_postfix(loss=f'{loss.item():08.3f}')
     if use_wandb:
       wandb.log({'loss': loss.item()})

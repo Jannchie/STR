@@ -31,7 +31,7 @@ class SimpleX(torch.nn.Module):
     latent_dim = config.get('latent_dim', 64)
     attention_head = config.get('attention_head', 1)
     dropout = config.get('dropout', 0)
-    n_interactive_items = config.get('n_interactive_items')
+    n_interactive_items = config.get('n_interactive_items', 4)
     
     # if 'aggregate' in config and config.get('w_ii', 1) != 1:
     user_top_index = helper.train_set.groupby('user_id')['item_id'].apply(lambda x: torch.tensor(x.value_counts().index[:n_interactive_items])).to_list()
