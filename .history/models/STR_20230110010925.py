@@ -1,7 +1,7 @@
 import torch
 from torch.nn import functional as F
 from models.SimpleX import SimpleX
-from utils import CNT_COL, GROUP_COL, ITEM_COL, USER_COL, TagRecHelper
+from utils import CNT_COL, ITEM_COL, USER_COL, TagRecHelper
 import numpy as np
 
 class STR(torch.nn.Module):
@@ -15,7 +15,7 @@ class STR(torch.nn.Module):
     self.config = config
     self.nuser = helper.nuser
     self.nitem = helper.nitem
-    self.ngroup = helper.ngroup
+
     self.latent_dim = config.get('latent_dim', 64)
     self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     self.item_emb = torch.nn.Embedding(self.nitem + 1, self.latent_dim, padding_idx=self.nitem, max_norm=self.latent_dim)
@@ -58,15 +58,13 @@ class STR(torch.nn.Module):
     torch.nn.init.zeros_(self.user_emb.weight[-1, :])
     torch.nn.init.zeros_(self.item_emb.weight[-1, :])
     # if 'aggregate' in config and config.get('w_ii', 1) != 1:
-    u, i, g, v = \
+    u, i, v = \
         torch.tensor(helper.train_set[USER_COL].values), \
         torch.tensor(helper.train_set[ITEM_COL].values), \
-        torch.tensor(helper.train_set[GROUP_COL].values), \
         torch.tensor(helper.train_set[CNT_COL].values if CNT_COL in helper.train_set else np.ones(len(helper.train_set)))
    
     self.ui_sp_mat = torch.sparse.LongTensor(torch.stack((u, i)), v, torch.Size([self.nuser, self.nitem])).to(self.device)
-    self.gi_sp_mat = torch.sparse.LongTensor(torch.stack((g, i)), v, torch.Size([self.ngroup, self.nitem])).to(self.device)
-    
+    self.gi_sp_mat = torch.sparse.LongTensor(torch.stack((i, u)), v, torch.Size([self.nitem, self.nuser])).to(self.device)
     if config.get('w_ii', 0) > 0:
       ii_mat = torch.sparse.mm(self.ui_sp_mat.t().float(), self.ui_sp_mat.float()).to_dense() 
       ii_mat = ii_mat * (1 - torch.eye(self.nitem))

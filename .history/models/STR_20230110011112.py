@@ -1,7 +1,7 @@
 import torch
 from torch.nn import functional as F
 from models.SimpleX import SimpleX
-from utils import CNT_COL, GROUP_COL, ITEM_COL, USER_COL, TagRecHelper
+from utils import CNT_COL, ITEM_COL, USER_COL, TagRecHelper
 import numpy as np
 
 class STR(torch.nn.Module):
@@ -61,7 +61,7 @@ class STR(torch.nn.Module):
     u, i, g, v = \
         torch.tensor(helper.train_set[USER_COL].values), \
         torch.tensor(helper.train_set[ITEM_COL].values), \
-        torch.tensor(helper.train_set[GROUP_COL].values), \
+        torch.tensor(helper.train_set['group_id'].values), \
         torch.tensor(helper.train_set[CNT_COL].values if CNT_COL in helper.train_set else np.ones(len(helper.train_set)))
    
     self.ui_sp_mat = torch.sparse.LongTensor(torch.stack((u, i)), v, torch.Size([self.nuser, self.nitem])).to(self.device)

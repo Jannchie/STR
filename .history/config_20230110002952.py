@@ -5,7 +5,7 @@ str_config = {
   'loss_neg_m': 0.4,
   'weight_decay': 1e-6,
   'batch_size': 1024,
-  'n_epoch': 50,
+  'n_epoch': 10,
   'latent_dim': 128,
   'affinity': 'dot',
   'aggregate': 'weighted-sum',

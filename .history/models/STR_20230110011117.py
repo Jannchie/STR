@@ -1,7 +1,7 @@
 import torch
 from torch.nn import functional as F
 from models.SimpleX import SimpleX
-from utils import CNT_COL, GROUP_COL, ITEM_COL, USER_COL, TagRecHelper
+from utils import CNT_COL, ITEM_COL, USER_COL, TagRecHelper
 import numpy as np
 
 class STR(torch.nn.Module):

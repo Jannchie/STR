@@ -37,6 +37,14 @@ class SimpleX(torch.nn.Module):
     user_top_index = helper.train_set.groupby('user_id')['item_id'].apply(lambda x: torch.tensor(x.value_counts().index[:n_interactive_items])).to_list()
     user_top_count = helper.train_set.groupby('user_id')['item_id'].apply(lambda x: torch.tensor(x.value_counts().values[:n_interactive_items])).to_list()
     self.user_top_len = torch.tensor([len(x) for x in user_top_index], device=self.device)
+    # self.user_top_mask = torch.zeros(self.nuser, n_interactive_items, dtype=torch.bool, device=self.device)
+    # for idx, x in enumerate(self.user_top_len):
+    #   self.user_top_mask[idx, x:] = True
+    
+    # count > 2
+    # user_top_index = [x[x > 2] for x in user_top_index]
+    # user_top_count = [x[x > 2] for x in user_top_count]
+    
     self.user_top_index = torch.nn.utils.rnn.pad_sequence(user_top_index, batch_first=True, padding_value=self.nitem).to(self.device)
     self.user_top_count = torch.nn.utils.rnn.pad_sequence(user_top_count, batch_first=True, padding_value=0).to(self.device)
 

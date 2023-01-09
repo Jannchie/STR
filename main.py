@@ -64,10 +64,6 @@ def run(model: torch.nn.Module, helper: TagRecHelper, config: dict, dataset: str
     if dataset == 'bilibili':
       rec_list = [d['name'] for d in rec_helper.get_rec_tags('1850091')]
       print(f'for 1850091: {rec_list}')
-    
-    model.w_n = 10
-    model.w_a = 0.25
-    model.w_k = 0.05
     res_df, res_mean_df = helper.test(model, should_mask=dataset != 'bilibili')
     res_mean = res_mean_df.values[0]
     scheduler.step(res_mean[0])
@@ -183,7 +179,7 @@ if __name__ == '__main__':
         wandb.login()
         sweep_id = wandb.sweep(sweep=sweep_configuration, project=f"{model_name}-{dataset}", entity="jannchie")
         wandb.agent(sweep_id, function=r)
-    # sweep_configuration['parameters']['group_loss_gamma'] = {'values': [0, 0.1, 0.2, 0.3, 0.4, 0.5]}
+    # sweep_configuration['parameters']['w_g'] = {'values': [0, 0.1, 0.2, 0.3, 0.4, 0.5]}
     # sweep_configuration['parameters']['aggregate'] = {'values': ['weighted-sum']}
     # sweep_configuration['parameters']['loss_neg_k'] = {'values': [4, 8, 16, 32, 64]}
     # sweep_configuration['parameters']['w_ii'] = {'value': 1}

@@ -1,7 +1,7 @@
 import torch
 from torch.nn import functional as F
 from models.SimpleX import SimpleX
-from utils import CNT_COL, GROUP_COL, ITEM_COL, USER_COL, TagRecHelper
+from utils import CNT_COL, ITEM_COL, USER_COL, TagRecHelper
 import numpy as np
 
 class STR(torch.nn.Module):
@@ -15,7 +15,7 @@ class STR(torch.nn.Module):
     self.config = config
     self.nuser = helper.nuser
     self.nitem = helper.nitem
-    self.ngroup = helper.ngroup
+
     self.latent_dim = config.get('latent_dim', 64)
     self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     self.item_emb = torch.nn.Embedding(self.nitem + 1, self.latent_dim, padding_idx=self.nitem, max_norm=self.latent_dim)
@@ -58,14 +58,12 @@ class STR(torch.nn.Module):
     torch.nn.init.zeros_(self.user_emb.weight[-1, :])
     torch.nn.init.zeros_(self.item_emb.weight[-1, :])
     # if 'aggregate' in config and config.get('w_ii', 1) != 1:
-    u, i, g, v = \
+    u, i, v = \
         torch.tensor(helper.train_set[USER_COL].values), \
         torch.tensor(helper.train_set[ITEM_COL].values), \
-        torch.tensor(helper.train_set[GROUP_COL].values), \
         torch.tensor(helper.train_set[CNT_COL].values if CNT_COL in helper.train_set else np.ones(len(helper.train_set)))
    
     self.ui_sp_mat = torch.sparse.LongTensor(torch.stack((u, i)), v, torch.Size([self.nuser, self.nitem])).to(self.device)
-    self.gi_sp_mat = torch.sparse.LongTensor(torch.stack((g, i)), v, torch.Size([self.ngroup, self.nitem])).to(self.device)
     
     if config.get('w_ii', 0) > 0:
       ii_mat = torch.sparse.mm(self.ui_sp_mat.t().float(), self.ui_sp_mat.float()).to_dense() 
@@ -150,6 +148,7 @@ class STR(torch.nn.Module):
         pred(torch.FloatTensor): user embedding. [batch_size, latent_dim]
     """
     eu = self.user_emb(u)
+    # eu = self.batch_norm(eu)
     if self.config.get('affinity', 'dot') == 'cos':
       eu = F.normalize(eu)
     return self.user_dropout(eu)
@@ -162,6 +161,7 @@ class STR(torch.nn.Module):
         pred(torch.FloatTensor): item embedding. [batch_size, latent_dim]
     """
     e = self.item_emb(i)
+    # e = self.batch_norm(e)
     if self.config.get('affinity', 'dot') == 'cos':
       e = F.normalize(e)
     return e
@@ -176,7 +176,6 @@ class STR(torch.nn.Module):
     e = self.item_emb(nei[0][idx]) # [batch_size, top_k, latent_dim]
     if self.config.get('affinity', 'dot') == 'cos':
       e = F.normalize(e, dim=2)
-    e = self.item_dropout(e)
     method = self.config.get('aggregate', 'mean')
     if method == 'mean':
       e = e.mean(dim=1)
@@ -188,6 +187,7 @@ class STR(torch.nn.Module):
       weights = nei[1][idx] ** self.config.get('aggregate_a', 0.75) * mask.float() 
       weights = weights / weights.sum(dim=1, keepdim=True)
       e = (e * weights[..., None]).sum(dim=1)
+    e = self.item_dropout(e)
     return e
   
   def user_history_embedding(self, u: torch.Tensor) -> torch.Tensor:
@@ -272,7 +272,7 @@ class STR(torch.nn.Module):
         group_items_embeddings = self.item_dropout(self.item_embedding(self.group_items[group]))
         loss_g = self.get_loss(ue, group_items_embeddings.mean(dim=1)).mean()
       neg_loss = self.get_neg_loss(ue, neg_ie)
-      return ((w * loss_cf + (1 - w) * loss_uie).mean() * (1 - self.w_g)) + self.w_g * loss_g + neg_loss
+      return ((w * loss_cf + (1 - w) * loss_uie).mean() * (1 - self.w_g)) + loss_g * self.w_g + neg_loss
   
   # def forward(self, user: torch.Tensor, item: torch.Tensor, group: torch.Tensor = None):
   #   """ Return prediction loss.
