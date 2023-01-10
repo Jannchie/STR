@@ -77,14 +77,14 @@ class RecHelper:
     self.data = data
     
   def get_name(self, id):
-    return self.tag_info[id]
+    return self.tag_info.get(id, '')
   
   def get_rec_tags(self, id:str, n=20):
     if id not in self.data.uid2idx:
       return []
     idx = self.data.uid2idx[id]
     tag_idxs = [int(x) for x in self.model.recommend(torch.tensor([idx]))[1][0]]
-    return [{'id': int(self.data.iidx2id.get(i)), 'name': self.get_name(self.data.iidx2id.get(i))} for i in tag_idxs[:n] if i != '']
+    return [{'id': int(self.data.iidx2id.get(i, 0)), 'name': self.get_name(self.data.iidx2id.get(i, 0))} for i in tag_idxs[:n] if i != '']
 
 def printt(arg0):
   print('*' * 20)

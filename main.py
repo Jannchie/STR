@@ -159,7 +159,7 @@ if __name__ == '__main__':
     model = MF
   sweep = False
   if not sweep:
-    if use_wandb: wandb.init(project=f"{model_name}-{dataset}", entity="jannchie", name=f"{now.strftime('%Y%m%d%H%M%S')}")
+    if use_wandb: wandb.init(project=f"{model_name}-{dataset}", entity="jannchie", name=f"{now.strftime('%Y%m%d%H%M%S')}", dir='./models')
     if use_wandb: wandb.config.update(config)
     run(model, trd, config, dataset)
   else:
@@ -186,11 +186,11 @@ if __name__ == '__main__':
     # sweep_configuration['parameters']['loss_neg_n'] = {'values': [800, 1000, 1200, 1600, 2000]}
     # sweep_configuration['parameters']['dropout'] = {'value': 0.1}
     # sweep_configuration['parameters']['loss_neg_k'] = {'values': [10, 50, 100, 150, 200, 250, 300, 500]}
-    sweep_configuration['parameters']['loss_neg_w'] = {'values': [130, 150, 200, 300]}
-    sweep_configuration['parameters']['popular_alpha'] = {'values': [0, 0.2, -0.2]}
-    sweep_configuration['parameters']['n_interactive_items'] = {'values': [4, 8, 16]}
+    # sweep_configuration['parameters']['loss_neg_w'] = {'values': [130, 150, 200, 300]}
+    # sweep_configuration['parameters']['popular_alpha'] = {'values': [0, 0.2, -0.2]}
+    # sweep_configuration['parameters']['n_interactive_items'] = {'values': [4, 8, 16]}
     # sweep_configuration['parameters']['loss_neg_m'] = {'values': [0.0]}
-    sweep_configuration['parameters']['aggregate_a'] = {'values': [0.2, 0, -0.2] }
+    # sweep_configuration['parameters']['aggregate_a'] = {'values': [0.2, 0, -0.2] }
     # sweep_configuration['parameters']['loss_neg_w'] = {'values': [30, 40, 50, 60]}
     # sweep_configuration['parameters']['loss_neg_a'] = {'values': [] }
     run_sweep()

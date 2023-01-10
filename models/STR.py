@@ -23,7 +23,7 @@ class STR(torch.nn.Module):
     self.dim = config.get('latent_dim', 64)
     self.n_interactive_items = config.get('n_interactive_items', 10)
     self.loss_neg_n = config.get('loss_neg_n', 2000)
-    self.loss_neg_a = config.get('loss_neg_a', 1)
+    self.loss_neg_k = config.get('loss_neg_k', self.loss_neg_n)
     self.loss_neg_w = config.get('loss_neg_w', 50)
     self.loss_neg_m = config.get('loss_neg_m', 0.4)
     self.weight_decay = config.get('weight_decay', 1e-6)
@@ -65,7 +65,7 @@ class STR(torch.nn.Module):
         torch.tensor(helper.train_set[CNT_COL].values if CNT_COL in helper.train_set else np.ones(len(helper.train_set)))
    
     self.ui_sp_mat = torch.sparse.LongTensor(torch.stack((u, i)), v, torch.Size([self.nuser, self.nitem])).to(self.device)
-    self.gi_sp_mat = torch.sparse.LongTensor(torch.stack((g, i)), v, torch.Size([self.ngroup, self.nitem])).to(self.device)
+    # self.gi_sp_mat = torch.sparse.LongTensor(torch.stack((g, i)), v, torch.Size([self.ngroup, self.nitem])).to(self.device)
     
     if config.get('w_ii', 0) > 0:
       ii_mat = torch.sparse.mm(self.ui_sp_mat.t().float(), self.ui_sp_mat.float()).to_dense() 
@@ -82,7 +82,7 @@ class STR(torch.nn.Module):
       del uu_mat
       torch.cuda.empty_cache()
     
-    if config.get('w_h', 0) > 0:
+    if config.get('w_ui', 0) > 0:
       d = self.ui_sp_mat.to_dense()
       self.user_nei_item = d.topk(self.n_interactive_items, dim=1)
     if config.get('aggregate', 'mean') == 'self-attention':
@@ -138,7 +138,8 @@ class STR(torch.nn.Module):
   def get_neg_loss(self, ue: torch.Tensor, neg_ie: torch.Tensor):
     neg_ie_num = neg_ie.shape[0]
     neg_ue = ue.repeat(1, neg_ie_num // ue.shape[0]).view(-1, self.dim)
-    neg_pred = self.affinity(neg_ue, neg_ie).view(-1, neg_ie_num)
+    neg_pred = self.affinity(neg_ue, neg_ie).view(ue.shape[0], -1)
+    neg_pred = neg_pred.topk(self.loss_neg_k, dim=-1).values
     neg_loss = (F.relu(neg_pred - self.loss_neg_m)).mean(dim=1)
     return neg_loss * self.loss_neg_w
   
@@ -224,6 +225,7 @@ class STR(torch.nn.Module):
         torch.Tensor: user embedding. [batch_size, latent_dim]
     """
     ie = self.item_embedding(self.user_top_index[u])
+    ie = self.item_dropout(ie)
     aggregate = self.config.get('aggregate', 'mean')
     if (aggregate == 'mean'):
       mask = ie.sum(dim=-1) != 0
@@ -236,7 +238,6 @@ class STR(torch.nn.Module):
       weights = self.user_top_count[u] ** alpha * mask.float() 
       weights = weights / weights.sum(dim=1, keepdim=True)
       e = (ie * weights[..., None]).sum(dim=1)   
-    e = self.item_dropout(e)
     return e
 
   def forward(self, user: torch.Tensor, item: torch.Tensor, group: torch.Tensor = None):
@@ -248,23 +249,25 @@ class STR(torch.nn.Module):
         loss(torch.Tensor): prediction loss. [batch_size] 
     """
       
+    w_ui = self.config.get('w_ui', 1)
+    w_cf = self.config.get('w_cf', 1)
+    w_g = self.config.get('w_g', 0)
+    
     neg_idx = self.item_dist.multinomial(num_samples=(user.shape[0] * self.config.get('loss_neg_n', 0)), replacement=True)
     neg_ie = self.item_embedding(neg_idx).view(-1, self.config.get('latent_dim', 64))
-
     ie = self.item_embedding(item)
-    w_cf = self.config.get('w_cf', 1)
-    loss_uie = 0
     ue = self.user_embedding(user)
-    loss_cf = self.get_ccl_loss(ue, ie, neg_ie) if w_cf != 0 else 0
+    loss_ui = 0
+    loss_cf = self.get_loss(ue, ie) if w_cf != 0 else 0
     if w_cf != 1:
       uie = self.user_item_embedding(user)
-      loss_uie = self.get_ccl_loss(uie, ie, neg_ie)
+      loss_ui = self.get_loss(uie, ie)
     loss_g = 0
-    # neg_loss = self.get_neg_loss(ue, neg_ie)
+    neg_loss = self.get_neg_loss(ue, neg_ie)
     if self.w_g > 0 and group is not None:
       group_items_embeddings = self.item_dropout(self.item_embedding(self.group_items[group]))
-      loss_g = self.get_ccl_loss(ie, group_items_embeddings.mean(dim=1), neg_ie).mean()
-    return ((w_cf * loss_cf + (1 - w_cf) * loss_uie) * (1 - self.w_g)).mean() + self.w_g * loss_g 
+      loss_g = self.get_loss(ue, group_items_embeddings.mean(dim=1)).mean()
+    return (w_cf * loss_cf + w_ui * loss_ui + w_g * loss_g + neg_loss).mean()
   
   # def forward(self, user: torch.Tensor, item: torch.Tensor, group: torch.Tensor = None):
   #   """ Return prediction loss.
@@ -283,7 +286,7 @@ class STR(torch.nn.Module):
   #   w_uu = self.config.get('w_uu', 0)
   #   w_ii = self.config.get('w_ii', 0)
   #   w_gi = self.config.get('w_gi', 0)
-  #   w_h = self.config.get('w_h', 0)
+  #   w_ui = self.config.get('w_ui', 0)
     
   #   ue = self.user_embedding(user)
   #   loss_cf = self.get_loss(ue, ie)
@@ -294,10 +297,10 @@ class STR(torch.nn.Module):
   #     group_items_embeddings = self.item_dropout(self.item_embedding(group_items))
   #     loss_g = self.get_loss(ue, group_items_embeddings.mean(dim=1)).mean()
     
-  #   loss_h = self.get_loss(self.user_history_embedding(user), ie) if w_h > 0 else torch.zeros_like(loss_cf)
+  #   loss_h = self.get_loss(self.user_history_embedding(user), ie) if w_ui > 0 else torch.zeros_like(loss_cf)
   #   neg_loss = self.get_neg_loss(ue, neg_ie)
     
-  #   return ((w_cf * loss_cf  + w_h * loss_h).mean()) * (1 - self.w_g) + self.w_g * loss_g + neg_loss
+  #   return ((w_cf * loss_cf  + w_ui * loss_h).mean()) * (1 - self.w_g) + self.w_g * loss_g + neg_loss
 
   def rec_by_user_history(self, u, k=20, mask=None):
     uie = self.user_history_embedding(u)
@@ -327,20 +330,3 @@ class STR(torch.nn.Module):
         torch.Tensor: recommend items.
     """
     return self.rec_by_ui(u.to(self.device), k, mask)
-    
-    x = 0
-    w = self.config.get('w_cf', 1)
-    true_w = w
-    u = u.to(self.device)
-    if w != 0:
-      ue = self.user_embedding(u)
-      x += torch.mm(ue, self.item_embedding(torch.arange(self.nitem, device=self.device)).T) * true_w
-    if w != 1:
-      uie = self.user_item_embedding(u)
-      x_uui = torch.mm(uie, self.item_embedding(torch.arange(self.nitem, device=self.device)).T) * (1 - true_w)
-      x += x_uui
-    if mask:
-      for i, m in enumerate(u):
-        x[i][mask[m]] = -1e4
-    return torch.topk(x, k=k, dim=1)
-    # return self.rec_by_ui(u.to(self.device), k, mask)
